@@ -1,0 +1,7 @@
+[default]
+# cocogitto writes each changelog entry as "subject - (<short sha>) - Author".
+# A short sha is hex, so one starting with letters can read as prose: v0.7.0
+# carried (ba18ea8), and typos flagged `ba` as a misspelling of `by`/`be`,
+# failing CI on the release bump commit. Ignore parenthesized hex ids rather
+# than excluding CHANGELOG.md, so its prose stays spell-checked.
+extend-ignore-re = ["\\([0-9a-f]{7,40}\\)"]

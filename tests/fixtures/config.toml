@@ -1,0 +1,99 @@
+[defaults]
+domain = "eng"
+contexts = ["personal", "work"]
+shim_path = "~/.local/clankers/bin"
+sandbox_wrapper = "~/.config/sandbox-exec/run-sandboxed.sh"
+prompter_bundle = "~/.local/prompter"
+prompt_cache = "~/.cache/clanker/prompts"
+prompt_cache_ttl_seconds = 86400
+
+[harness.claude]
+bin = "claude"
+family = "claude"
+default_args = ["--dangerously-skip-permissions"]
+
+[harness.claude.injection]
+kind = "arg-text"
+args = ["--append-system-prompt", "{text}"]
+
+[harness.claude.config_dir]
+environment = "CLAUDE_CONFIG_DIR"
+path = "~/.config/claude/{context}"
+
+[harness.codex]
+bin = "codex"
+family = "gpt"
+default_args = ["-s", "danger-full-access"]
+
+[harness.codex.injection]
+kind = "arg-file"
+args = ["-c", "model_instructions_file={file}"]
+
+[harness.codex.config_dir]
+environment = "CODEX_HOME"
+path = "~/.config/codex/{context}"
+
+[harness.gemini]
+bin = "gemini"
+family = "gemini"
+default_args = []
+
+[harness.gemini.injection]
+kind = "env-file"
+environment = "GEMINI_SYSTEM_MD"
+
+[harness.opencode]
+bin = "opencode"
+family = "gpt"
+default_args = []
+
+[harness.opencode.injection]
+kind = "opencode-instructions"
+environment = "OPENCODE_CONFIG_CONTENT"
+
+[harness.opencode.config_dir]
+environment = "OPENCODE_CONFIG_DIR"
+path = "~/.config/opencode/{context}"
+
+[harness.polytoken]
+bin = "polytoken"
+family = "gpt"
+default_args = ["new"]
+
+[harness.polytoken.injection]
+kind = "env-file"
+environment = "CLANKER_PROMPT_FILE"
+
+[harness.polytoken.config_dir.directories]
+POLYTOKEN_CONFIG_PATH = "~/.config/polytoken/{context}"
+POLYTOKEN_DATA_PATH = "~/.local/share/polytoken/{context}"
+POLYTOKEN_CACHE_PATH = "~/.cache/polytoken/{context}"
+
+[model.claude-alt]
+harness = "claude"
+family = "gpt"
+harness_args = ["--model", "alt"]
+
+[model.claude-alt.env]
+ANTHROPIC_BASE_URL = "https://example.invalid/anthropic"
+ANTHROPIC_MODEL = "alt-model"
+
+[model.codex-native]
+harness = "codex"
+family = "gpt"
+env = {}
+harness_args = ["--model", "gpt-test"]
+
+[domain.eng]
+profiles = ["core.base", "domain.eng"]
+env = { CLANKER_TEST_DOMAIN = "engineering" }
+
+[domain.research]
+profiles = ["core.base", "domain.research"]
+env = { CLANKER_TEST_DOMAIN = "research" }
+default_model = "codex-native"
+
+[domain.admin]
+profiles = ["core.base"]
+env = { CLANKER_TEST_DOMAIN = "admin" }
+default_model = "claude-alt"
