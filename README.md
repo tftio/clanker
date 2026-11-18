@@ -53,10 +53,10 @@ floor is 95% rather than the generated 100% because the binary entry in
 `execute_plan` process replacement that never returns on success, a few
 structurally-unreachable command guards, and filesystem I/O error-map closures
 that require OS-specific or permission errors cannot be exercised by a genuine,
-network-free, in-process test. The axis resolution, prompt, config, context, and
-session and exec-plan logic is otherwise covered by inline unit tests, and every
-offline command is driven through the binary, keeping actual coverage at 97.12%. See
-REPO_INVARIANTS.md RS-007.
+network-free, in-process test. The axis resolution, layout, prompt, config,
+context, and session and exec-plan logic is otherwise covered by inline unit
+tests, and every offline command is driven through the binary, keeping actual
+coverage at 97.22%. See REPO_INVARIANTS.md RS-007.
 
 ## Selection
 
@@ -263,6 +263,32 @@ so creating an empty one would turn a misconfiguration into a session with no
 credentials and no explanation. Under `clanker exec`, the same all-or-nothing
 rule applies per harness; a missing directory warns and omits that harness's
 whole set without blocking variables from other harnesses.
+
+## Configuration layout
+
+<!-- AGENT_GENERATED: true; AGENT_MODEL: deepseek-v4.1-flash-1017; AGENT_DATE: 2026-11-18 -->
+
+`clanker config dirs` reports every configuration directory the merged
+configuration resolves: one row per harness, supported context, provider, and
+declared variable. It uses the same context substitution and provider derivation
+as a launch, but it is read-only. It creates nothing, exports nothing, and lists
+directories that do not exist with `exists=false` rather than rejecting them.
+
+Text output is one tab-separated line per row, with no header:
+
+```text
+<harness>	<context>	<provider>	<variable>	<path>	<exists>
+```
+
+The provider field is empty for a harness's own directory and holds the provider
+name for a derived directory. `--json` emits the same rows as objects with
+`harness`, `context`, `provider` (`null` for native), `variable`, `path`, and
+`exists`. `--context <name>` and `--provider <name>` restrict the rows; naming a
+context or provider that the configuration does not define is an error.
+
+The command is the read-only contract for tooling that installs persistent
+content into harness directories: it exposes provider-derived and multi-variable
+roots without requiring a consumer to parse or re-derive clanker's schema.
 
 ## Providers
 
