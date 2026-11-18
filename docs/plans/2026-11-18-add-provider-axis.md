@@ -304,6 +304,20 @@ hook except `cargo deny` (RUSTSEC-2026-0543, present on `main` at `45a016f`);
 and the stated figure in README.md and REPO_INVARIANTS.md RS-007 moved from 97.03% to
 97.19%. T008 and T009 depend on T007 and wait with it.
 
+### 2026-11-18 — jfb (operator)
+
+Question or decision needed: whether a provider implies a new base directory for
+Claude Code, Codex, and OpenCode without a table per harness; the cargo deny advisory;
+committing; T008 and T009.
+
+Decision or guidance received: a provider derives its directories automatically for
+every harness that has a config_dir (the "option 1" design). Replace chrono; jiff or
+time are both acceptable. Commit the work so far on the feature branch (done:
+`1eac504` and `ebac713`). T008 and T009 approvals are acknowledged for later.
+
+Impact on plan: D007 supersedes D002. New tasks T010 (replace chrono) and T011
+(derive provider directories); T007 now depends on both and returns to `not_started`.
+
 ## Decision Log
 
 Append-only. Decisions affecting architecture, behavior, sequencing, or tradeoffs.
@@ -346,6 +360,22 @@ and provider `env` may not set. Symlink mode prepends the provider's `harness_ar
 the passthrough as well as applying its `env` and directories: a provider applied
 without its arguments would be half-applied, and symlink mode has no other argument
 composition to conflict with.
+
+### 2026-11-18 — D007: provider directories are derived, not declared (supersedes D002)
+
+A provider covers every harness that declares a `config_dir`, in every context the
+harness supports, and derives each directory from the harness's own template: when
+`{context}` is a whole path component, the component before it gains `-<provider>`
+(`~/.config/claude/{context}` becomes `~/.config/claude-zai/{context}`); when `{context}`
+sits inside a component, that component gains `-<provider>` at its end; a fixed
+single-context path gains `-<provider>` on its last component (`~/.pi/agent` becomes
+`~/.pi/agent-zai`). The provider name grammar is already safe as part of a path
+component. `[provider.<name>]` may be empty; `[provider.<name>.harness.<harness>]`
+carries only optional `env` and `harness_args`, and naming a harness without a
+`config_dir` there is a configuration error. Selecting a provider for a harness with no
+`config_dir` fails with `ProviderHarnessUnsupported`, since there is no directory to
+separate. Derivation always changes the path, so the "never the native directory" rule
+holds by construction rather than by validation.
 
 # Task Graph
 
@@ -586,9 +616,11 @@ tasks:
       passes, including typos and taplo, except the pre-existing cargo deny advisory.
   - id: T007
     title: Run the full gate
-    status: blocked
+    status: not_started
     depends_on:
       - T006
+      - T010
+      - T011
     owner: null
     description: >
       Run the repository's CI gate locally and record the results.
@@ -643,6 +675,62 @@ tasks:
       - clanker doctor reports healthy.
       - Dry runs show CLAUDE_CONFIG_DIR under ~/.config/claude-zai/<context> for `glm` and under ~/.config/claude/<context> for `claude`.
       - A live `glm -p 'say hi'` returns a reply and its session appears only under ~/.config/claude-zai/<context>.
+    completion_evidence: null
+  - id: T010
+    title: Replace chrono with jiff for the local date
+    status: done
+    depends_on: []
+    owner: null
+    description: >
+      chrono is unmaintained (RUSTSEC-2026-0543) and fails cargo deny. clanker
+      uses it only to format today's local date as YYYY-MM-DD in three places
+      in src/promptlib. Replace it with jiff and drop the chrono dependency.
+    work_items:
+      - Replace chrono::Local::now() date formatting in src/promptlib/mod.rs and src/promptlib/render.rs with jiff's local date.
+      - Remove chrono from Cargo.toml and update Cargo.lock through cargo.
+      - Confirm cargo deny, cargo audit, and cargo machete pass.
+    invariants:
+      - The rendered date string keeps the YYYY-MM-DD format in the local time zone.
+      - No advisory is ignored in deny.toml to make the gate pass.
+    acceptance_checks:
+      - The existing prompt rendering tests pass unchanged.
+      - mise run check passes, including cargo deny.
+    completion_evidence: >
+      Done 2026-11-18. Files touched: Cargo.toml (chrono removed; jiff = "0.2.39"),
+      Cargo.lock (jiff pinned at 0.2.39 with cargo update --precise; jiff 0.2.39 was
+      published 2026-11-02, while every later release, including 1.0.0 and 1.0.1, was
+      under two weeks old on 2026-11-18), src/promptlib/mod.rs (local_date at :259,
+      jiff::Zoned::now().date() rendered as YYYY-MM-DD; used by format_system_prefix;
+      new test local_date_is_an_iso_calendar_date), src/promptlib/render.rs (both call
+      sites, including the test fixture, use crate::promptlib::local_date). A live
+      clanker prompt run printed "Today is 2026-11-18", matching date +%F. No advisory
+      was ignored. cargo nextest: 354 tests pass. mise run check: every hook passes,
+      including cargo deny, cargo audit, and cargo machete.
+  - id: T011
+    title: Derive provider directories from the harness templates
+    status: not_started
+    depends_on: []
+    owner: null
+    description: >
+      Implement D007. A provider covers every harness with a config_dir and
+      derives each directory from the harness template, so one empty
+      [provider.<name>] table gives Claude Code, Codex, and OpenCode separate
+      directories. Per-harness tables keep only env and harness_args.
+    work_items:
+      - Remove config_dir from ProviderHarnessConfig and make ProviderConfig.harness optional.
+      - Add the derivation function for single and multiple directory shapes, covering a whole-component {context}, an embedded {context}, and a fixed single-context path.
+      - Replace the declared-directory validation with a check that each named harness exists and declares a config_dir; drop the at-least-one-harness rule.
+      - Make launch, symlink mode, and exec use derived directories for every harness with a config_dir, and refuse a harness without one.
+      - Report covered harnesses in clanker list as those with a config_dir.
+      - Update the tests and the README Providers section to the derived shape.
+    invariants:
+      - A derived directory never equals the harness's own directory for any context.
+      - With no provider, plans are identical to those before this task.
+      - A derived directory that does not exist fails a launch and is skipped with a warning under exec.
+    acceptance_checks:
+      - Unit tests cover the three derivation cases and both directory shapes.
+      - An integration test launches claude and codex with an empty provider table and asserts each derived directory.
+      - mise run check passes apart from any failure T010 has not yet removed.
     completion_evidence: null
 ```
 <!-- TASK_GRAPH:END -->
@@ -901,9 +989,9 @@ typos and taplo, except the pre-existing cargo deny advisory.
 
 ## T007 — Run the full gate
 
-Status: `blocked`
+Status: `not_started`
 
-Depends on: T006
+Depends on: T006, T010, T011
 
 ### Description
 
@@ -971,6 +1059,72 @@ their credential helpers, and point the aliases at the provider axis.
   under ~/.config/claude/<context> for `claude`.
 - A live `glm -p 'say hi'` returns a reply and its session appears only under
   ~/.config/claude-zai/<context>.
+
+### Completion Evidence
+
+Agents update this when the task is complete.
+
+## T010 — Replace chrono with jiff for the local date
+
+Status: `done`
+
+Depends on: none
+
+### Description
+
+chrono is unmaintained (RUSTSEC-2026-0543) and fails cargo deny. clanker uses it only to
+format today's local date as YYYY-MM-DD in three places in src/promptlib. Replace it
+with jiff and drop the chrono dependency.
+
+### Invariants
+
+- The rendered date string keeps the YYYY-MM-DD format in the local time zone.
+- No advisory is ignored in deny.toml to make the gate pass.
+
+### Acceptance Checks
+
+- The existing prompt rendering tests pass unchanged.
+- mise run check passes, including cargo deny.
+
+### Completion Evidence
+
+Done 2026-11-18. Files touched: Cargo.toml (chrono removed; jiff = "0.2.39"), Cargo.lock
+(jiff pinned at 0.2.39 with cargo update --precise; jiff 0.2.39 was published
+2026-11-02, while every later release, including 1.0.0 and 1.0.1, was under two weeks
+old on 2026-11-18), src/promptlib/mod.rs (local_date at :259, jiff::Zoned::now().date()
+rendered as YYYY-MM-DD; used by format_system_prefix; new test
+local_date_is_an_iso_calendar_date), src/promptlib/render.rs (both call sites, including
+the test fixture, use crate::promptlib::local_date). A live clanker prompt run printed
+"Today is 2026-11-18", matching date +%F. No advisory was ignored. cargo nextest: 354
+tests pass. mise run check: every hook passes, including cargo deny, cargo audit, and
+cargo machete.
+
+## T011 — Derive provider directories from the harness templates
+
+Status: `not_started`
+
+Depends on: none
+
+### Description
+
+Implement D007. A provider covers every harness with a config_dir and derives each
+directory from the harness template, so one empty `[provider.<name>]` table gives Claude
+Code, Codex, and OpenCode separate directories. Per-harness tables keep only env and
+harness_args.
+
+### Invariants
+
+- A derived directory never equals the harness's own directory for any context.
+- With no provider, plans are identical to those before this task.
+- A derived directory that does not exist fails a launch and is skipped with a warning
+  under exec.
+
+### Acceptance Checks
+
+- Unit tests cover the three derivation cases and both directory shapes.
+- An integration test launches claude and codex with an empty provider table and
+  asserts each derived directory.
+- mise run check passes apart from any failure T010 has not yet removed.
 
 ### Completion Evidence
 
