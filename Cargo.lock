@@ -630,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "tftio-clanker"
-version = "0.11.3"
+version = "0.12.0"
 dependencies = [
  "clap",
  "clap_complete",
