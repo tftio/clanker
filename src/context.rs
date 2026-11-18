@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::axis::{self, InvalidAxisValue, Resolved};
-use crate::config::{Config, ContextName, DomainName, ModelName};
+use crate::config::{Config, ContextName, DomainName, ModelName, ProviderName};
 
 /// A resolved context and the precedence tier that supplied it.
 pub type ResolvedContext = Resolved<ContextName>;
@@ -21,6 +21,8 @@ pub struct DirectoryConfig {
     pub domain: Option<DomainName>,
     /// Optional model selection used by subcommand mode.
     pub model: Option<ModelName>,
+    /// Optional provider selection.
+    pub provider: Option<ProviderName>,
     /// Optional project declaration.
     ///
     /// Present only so this strict parser accepts a `.clanker` carrying a
@@ -43,6 +45,7 @@ impl DirectoryConfig {
             context: self.context.or(farther.context),
             domain: self.domain.or(farther.domain),
             model: self.model.or(farther.model),
+            provider: self.provider.or(farther.provider),
             project: self.project,
         }
     }
@@ -310,13 +313,34 @@ env = {}
         fs::create_dir_all(&leaf).unwrap();
         fs::write(temp.path().join(".clanker"), "context = \"work\"\n").unwrap();
         fs::write(middle.join(".clanker"), "domain = \"research\"\n").unwrap();
-        fs::write(leaf.join(".clanker"), "model = \"codex-native\"\n").unwrap();
+        fs::write(
+            leaf.join(".clanker"),
+            "model = \"codex-native\"\nprovider = \"zai\"\n",
+        )
+        .unwrap();
 
         let merged = read_directory_config(&leaf).unwrap().unwrap();
 
         assert_eq!(merged.context.unwrap().as_str(), "work");
         assert_eq!(merged.domain.unwrap().as_str(), "research");
         assert_eq!(merged.model.unwrap().as_str(), "codex-native");
+        assert_eq!(merged.provider.unwrap().as_str(), "zai");
+    }
+
+    #[test]
+    fn a_nearer_config_inherits_a_farther_provider() {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(temp.path().join(".clanker"), "provider = \"zai\"\n").unwrap();
+        fs::write(repo.join(".clanker"), "context = \"work\"\n").unwrap();
+
+        let merged = read_directory_config(&repo).unwrap().unwrap();
+        assert_eq!(merged.provider.unwrap().as_str(), "zai");
+
+        fs::write(repo.join(".clanker"), "provider = \"deepseek\"\n").unwrap();
+        let nearest = read_directory_config(&repo).unwrap().unwrap();
+        assert_eq!(nearest.provider.unwrap().as_str(), "deepseek");
     }
 
     #[test]
@@ -331,6 +355,7 @@ env = {}
         assert_eq!(merged.context.unwrap().as_str(), "work");
         assert!(merged.domain.is_none());
         assert!(merged.model.is_none());
+        assert!(merged.provider.is_none());
     }
 
     #[test]

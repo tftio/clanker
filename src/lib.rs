@@ -137,6 +137,8 @@ pub struct RuntimeContext {
     pub domain_environment: Option<String>,
     /// `CLANKER_MODEL` value.
     pub model_environment: Option<String>,
+    /// `CLANKER_PROVIDER` value.
+    pub provider_environment: Option<String>,
     /// Inherited `PATH`.
     pub inherited_path: Option<OsString>,
     /// Inherited `CLANKER_`-prefixed environment, used to read session markers.
@@ -206,6 +208,7 @@ impl RuntimeContext {
             context_environment: self.context_environment.as_deref(),
             domain_environment: self.domain_environment.as_deref(),
             model_environment: self.model_environment.as_deref(),
+            provider_environment: self.provider_environment.as_deref(),
             inherited_path: self.inherited_path.as_deref(),
             inherited_names: &self.inherited_names,
             project_registry: &self.project_registry,
@@ -324,7 +327,11 @@ fn run_command_inner(
         Command::Env { harness, arguments } => {
             run_environment(harness, arguments, cli.config.as_deref(), runtime, output)
         }
-        Command::Exec { context, argv } => run_exec(context, argv, cli.config.as_deref(), runtime),
+        Command::Exec {
+            context,
+            provider,
+            argv,
+        } => run_exec(context, provider, argv, cli.config.as_deref(), runtime),
         Command::Project { command } => run_project(command, runtime, output),
         Command::Prompt { command } => {
             run_prompt_command(command, cli.config.as_deref(), runtime, output)
@@ -484,11 +491,12 @@ fn run_environment(
 
 fn run_exec(
     context: Option<OsString>,
+    provider: Option<OsString>,
     argv: Vec<OsString>,
     explicit_config: Option<&Path>,
     runtime: &RuntimeContext,
 ) -> Result<i32, ClankerError> {
-    let request = parse_exec(context, argv)?;
+    let request = parse_exec(context, provider, argv)?;
     let loaded = load_runtime_config(runtime, explicit_config)?;
     let (plan, skipped) = build_exec_plan(&request, &loaded.config, runtime.launch_inputs()?)?;
     for skip in skipped {
@@ -622,6 +630,14 @@ struct ListOutput {
     harnesses: Vec<String>,
     models: Vec<String>,
     domains: Vec<String>,
+    providers: Vec<ProviderListing>,
+}
+
+/// One configured provider and the harnesses it covers.
+#[derive(Debug, Serialize)]
+struct ProviderListing {
+    name: String,
+    harnesses: Vec<String>,
 }
 
 fn emit_list(loaded: &LoadedConfig, output: JsonOutput) -> Result<(), ClankerError> {
@@ -644,6 +660,15 @@ fn emit_list(loaded: &LoadedConfig, output: JsonOutput) -> Result<(), ClankerErr
             .keys()
             .map(ToString::to_string)
             .collect(),
+        providers: loaded
+            .config
+            .provider
+            .iter()
+            .map(|(name, provider)| ProviderListing {
+                name: name.to_string(),
+                harnesses: provider.harness.keys().map(ToString::to_string).collect(),
+            })
+            .collect(),
     };
     if output.is_json() {
         let data = serde_json::to_value(&listing)?;
@@ -663,6 +688,10 @@ fn emit_list(loaded: &LoadedConfig, output: JsonOutput) -> Result<(), ClankerErr
         println!("Domains:");
         for name in &listing.domains {
             println!("  {name}");
+        }
+        println!("Providers:");
+        for provider in &listing.providers {
+            println!("  {} ({})", provider.name, provider.harnesses.join(", "));
         }
     }
     Ok(())
@@ -700,6 +729,8 @@ fn emit_current(session: &CurrentSession, output: JsonOutput) -> Result<(), Clan
         ("domain_source", session.domain_source.as_deref()),
         ("model", session.model.as_deref()),
         ("model_source", session.model_source.as_deref()),
+        ("provider", session.provider.as_deref()),
+        ("provider_source", session.provider_source.as_deref()),
         ("family", session.family.as_deref()),
         ("project", session.project.as_deref()),
         ("project_source", session.project_source.as_deref()),
@@ -738,6 +769,12 @@ fn emit_dry_run(plan: &LaunchPlan, output: JsonOutput) -> Result<(), ClankerErro
         }
         if let Some(source) = plan.model_source {
             println!("model_source={}", source.label(axis::MODEL));
+        }
+        if let Some(provider) = &plan.provider {
+            println!("provider={provider}");
+        }
+        if let Some(source) = plan.provider_source {
+            println!("provider_source={}", source.label(axis::PROVIDER));
         }
         if let Some(family) = &plan.family {
             println!("family={family}");
@@ -832,6 +869,7 @@ mod tests {
             context_environment: None,
             domain_environment: None,
             model_environment: None,
+            provider_environment: None,
             inherited_path: None,
             clanker_environment: BTreeMap::new(),
             inherited_names: Vec::new(),

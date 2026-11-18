@@ -16,10 +16,11 @@ const CONTEXT_PLACEHOLDER: &str = "{context}";
 pub(crate) const PLAYWRIGHT_MCP_BROWSER_ENVIRONMENT: &str = "PLAYWRIGHT_MCP_BROWSER";
 pub(crate) const PLAYWRIGHT_MCP_USER_DATA_DIR_ENVIRONMENT: &str = "PLAYWRIGHT_MCP_USER_DATA_DIR";
 
-const CLANKER_OWNED_ENVIRONMENT: [&str; 5] = [
+const CLANKER_OWNED_ENVIRONMENT: [&str; 6] = [
     "PATH",
     "CONTEXT",
     "CLANKER_CONTEXT",
+    "CLANKER_PROVIDER",
     PLAYWRIGHT_MCP_BROWSER_ENVIRONMENT,
     PLAYWRIGHT_MCP_USER_DATA_DIR_ENVIRONMENT,
 ];
@@ -100,6 +101,7 @@ name_type!(ContextName, "context", "A validated context name.");
 name_type!(DomainName, "domain", "A validated domain name.");
 name_type!(HarnessName, "harness", "A validated harness name.");
 name_type!(ModelName, "model", "A validated model alias.");
+name_type!(ProviderName, "provider", "A validated provider name.");
 
 /// A validated prompter family name from runtime configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +139,12 @@ pub struct Config {
     pub model: BTreeMap<ModelName, ModelConfig>,
     /// Domain prompt compositions.
     pub domain: BTreeMap<DomainName, DomainConfig>,
+    /// Alternate inference endpoints a harness can be launched against.
+    ///
+    /// Absent from a configuration that defines none, so existing
+    /// configurations parse unchanged.
+    #[serde(default)]
+    pub provider: BTreeMap<ProviderName, ProviderConfig>,
 }
 
 /// Runtime defaults and shared filesystem locations.
@@ -389,6 +397,34 @@ impl ConfigDirectory {
     }
 }
 
+/// One alternate inference endpoint and the harnesses it covers.
+///
+/// A provider exists so one harness can run against a second endpoint, in any
+/// context, without sharing the native endpoint's config directories: those
+/// directories hold the harness's credentials and session history.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderConfig {
+    /// Per-harness settings, keyed by the harness they apply to.
+    pub harness: BTreeMap<HarnessName, ProviderHarnessConfig>,
+}
+
+/// How one provider changes one harness's launch.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderHarnessConfig {
+    /// Config directories used in place of the harness's own. Declares exactly
+    /// the harness's variables, and never resolves to the harness's own
+    /// directory for any context.
+    pub config_dir: ConfigDirectory,
+    /// Literal environment values applied by the provider.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// Native arguments appended for this provider.
+    #[serde(default)]
+    pub harness_args: Vec<String>,
+}
+
 /// One configured model alias.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -509,6 +545,7 @@ impl Config {
         let reserved = self.reserved_environment();
         self.validate_models(&reserved, &mut issues);
         self.validate_domains(&reserved, &mut issues);
+        self.validate_providers(&reserved, &mut issues);
         issues
     }
 
@@ -614,15 +651,7 @@ impl Config {
                         environment,
                     );
                     let key = config_dir.path_key(&prefix, environment);
-                    if harness
-                        .contexts
-                        .as_ref()
-                        .is_some_and(|contexts| contexts.len() == 1)
-                    {
-                        check_nonempty(issues, &key, path);
-                    } else {
-                        require_placeholder(issues, &key, path, CONTEXT_PLACEHOLDER);
-                    }
+                    check_directory_template(issues, &key, path, harness);
                 }
             }
         }
@@ -669,6 +698,132 @@ impl Config {
                 check_not_reserved(issues, &key, environment, reserved);
             }
         }
+    }
+}
+
+impl Config {
+    fn validate_providers(&self, reserved: &BTreeSet<String>, issues: &mut Vec<ConfigIssue>) {
+        for (name, provider) in &self.provider {
+            if provider.harness.is_empty() {
+                issues.push(ConfigIssue {
+                    key: format!("provider.{name}.harness"),
+                    message: "must cover at least one harness".to_string(),
+                });
+            }
+            for (harness_name, entry) in &provider.harness {
+                let prefix = format!("provider.{name}.harness.{harness_name}");
+                self.validate_provider_harness(&prefix, harness_name, entry, reserved, issues);
+            }
+        }
+    }
+
+    fn validate_provider_harness(
+        &self,
+        prefix: &str,
+        harness_name: &HarnessName,
+        entry: &ProviderHarnessConfig,
+        reserved: &BTreeSet<String>,
+        issues: &mut Vec<ConfigIssue>,
+    ) {
+        for environment in entry.env.keys() {
+            let key = format!("{prefix}.env.{environment}");
+            check_environment_name(issues, &key, environment);
+            check_not_reserved(issues, &key, environment, reserved);
+            for (model_name, model) in &self.model {
+                if &model.harness == harness_name && model.env.contains_key(environment) {
+                    issues.push(ConfigIssue {
+                        key: key.clone(),
+                        message: format!(
+                            "also set by model `{model_name}`; a provider and a model for the same harness may not set the same variable"
+                        ),
+                    });
+                }
+            }
+        }
+
+        let Some(harness) = self.harness.get(harness_name) else {
+            issues.push(ConfigIssue {
+                key: prefix.to_string(),
+                message: format!("unknown harness `{harness_name}`"),
+            });
+            return;
+        };
+        let directory_prefix = format!("{prefix}.config_dir");
+        let Some(native) = &harness.config_dir else {
+            issues.push(ConfigIssue {
+                key: directory_prefix,
+                message: format!(
+                    "harness `{harness_name}` declares no config_dir, so a provider cannot give it separate state"
+                ),
+            });
+            return;
+        };
+
+        let native_entries: BTreeMap<&str, &str> = native.entries().into_iter().collect();
+        let provider_entries = entry.config_dir.entries();
+        let declared: BTreeSet<&str> = provider_entries.iter().map(|(name, _)| *name).collect();
+        if declared != native_entries.keys().copied().collect() {
+            issues.push(ConfigIssue {
+                key: directory_prefix.clone(),
+                message: format!(
+                    "must declare exactly the variables harness.{harness_name}.config_dir declares: {}",
+                    native_entries.keys().copied().collect::<Vec<_>>().join(", ")
+                ),
+            });
+        }
+
+        let contexts: Vec<&ContextName> = self
+            .defaults
+            .contexts
+            .iter()
+            .filter(|context| harness.supports_context(context))
+            .collect();
+        for (environment, path) in provider_entries {
+            let key = entry.config_dir.path_key(&directory_prefix, environment);
+            check_directory_template(issues, &key, path, harness);
+            let Some(native_path) = native_entries.get(environment) else {
+                continue;
+            };
+            if let Some(context) = contexts.iter().find(|context| {
+                render_directory(path, context) == render_directory(native_path, context)
+            }) {
+                issues.push(ConfigIssue {
+                    key,
+                    message: format!(
+                        "resolves to harness `{harness_name}`'s own directory in context `{context}`; a provider needs its own directory so its state stays separate"
+                    ),
+                });
+            }
+        }
+    }
+}
+
+/// Render a directory template for one context, ignoring trailing separators,
+/// so two templates that name the same directory compare equal.
+fn render_directory(template: &str, context: &ContextName) -> String {
+    template
+        .replace(CONTEXT_PLACEHOLDER, context.as_str())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Check one config-directory path template against its harness's context
+/// restriction: a harness restricted to exactly one context may use a fixed
+/// path; every other harness needs `{context}` in the template.
+fn check_directory_template(
+    issues: &mut Vec<ConfigIssue>,
+    key: &str,
+    path: &str,
+    harness: &HarnessConfig,
+) {
+    if harness
+        .contexts
+        .as_ref()
+        .is_some_and(|contexts| contexts.len() == 1)
+    {
+        check_nonempty(issues, key, path);
+    } else {
+        require_placeholder(issues, key, path, CONTEXT_PLACEHOLDER);
     }
 }
 
@@ -1076,6 +1231,221 @@ default_model = "nomodel"
                 issue.key == key && issue.message.contains("computed by clanker")
             }));
         }
+    }
+
+    /// `COMPLETE_CONFIG` with a Claude config directory, plus `extra`.
+    fn provider_config(extra: &str) -> Config {
+        toml::from_str(&format!(
+            "{COMPLETE_CONFIG}\n[harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"~/.config/claude/{{context}}\"\n{extra}"
+        ))
+        .unwrap()
+    }
+
+    fn issue_keys(config: &Config) -> Vec<String> {
+        config.issues().into_iter().map(|issue| issue.key).collect()
+    }
+
+    const ZAI: &str = "
+[provider.zai.harness.claude]
+env = { ANTHROPIC_BASE_URL = \"https://api.z.ai/api/anthropic\" }
+harness_args = [\"--model\", \"opus\"]
+[provider.zai.harness.claude.config_dir]
+environment = \"CLAUDE_CONFIG_DIR\"
+path = \"~/.config/claude-zai/{context}\"
+";
+
+    #[test]
+    fn a_configuration_without_providers_parses_with_an_empty_provider_map() {
+        let config: Config = toml::from_str(COMPLETE_CONFIG).unwrap();
+        assert!(config.provider.is_empty());
+        assert!(config.issues().is_empty());
+    }
+
+    #[test]
+    fn a_valid_provider_produces_no_issues() {
+        let config = provider_config(ZAI);
+        assert!(config.issues().is_empty(), "{:?}", config.issues());
+        let entry = config
+            .provider
+            .get("zai")
+            .and_then(|provider| provider.harness.get("claude"))
+            .unwrap();
+        assert_eq!(
+            entry.env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some("https://api.z.ai/api/anthropic")
+        );
+        assert_eq!(entry.harness_args, ["--model", "opus"]);
+    }
+
+    #[test]
+    fn provider_env_and_args_default_to_empty() {
+        let config = provider_config(
+            "[provider.zai.harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"~/.config/claude-zai/{context}\"\n",
+        );
+        assert!(config.issues().is_empty());
+        let entry = config
+            .provider
+            .get("zai")
+            .and_then(|provider| provider.harness.get("claude"))
+            .unwrap();
+        assert!(entry.env.is_empty());
+        assert!(entry.harness_args.is_empty());
+    }
+
+    #[test]
+    fn a_provider_entry_rejects_unknown_fields_and_requires_a_config_dir() {
+        let unknown = format!(
+            "{COMPLETE_CONFIG}\n[provider.zai.harness.claude]\nbase_url = \"x\"\n[provider.zai.harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"~/x/{{context}}\"\n"
+        );
+        assert!(toml::from_str::<Config>(&unknown).is_err());
+
+        let missing = format!("{COMPLETE_CONFIG}\n[provider.zai.harness.claude]\nenv = {{}}\n");
+        let error = toml::from_str::<Config>(&missing).unwrap_err();
+        assert!(error.to_string().contains("config_dir"), "{error}");
+    }
+
+    #[test]
+    fn a_provider_must_cover_at_least_one_harness() {
+        let config = provider_config("[provider.zai.harness]\n");
+        assert!(issue_keys(&config).contains(&"provider.zai.harness".to_string()));
+    }
+
+    #[test]
+    fn a_provider_for_an_unknown_harness_is_reported() {
+        let config = provider_config(
+            "[provider.zai.harness.ghost.config_dir]\nenvironment = \"GHOST_DIR\"\npath = \"~/ghost/{context}\"\n",
+        );
+        let issues = config.issues();
+        assert!(issues.iter().any(|issue| {
+            issue.key == "provider.zai.harness.ghost" && issue.message.contains("unknown harness")
+        }));
+    }
+
+    #[test]
+    fn a_provider_for_a_harness_without_a_config_dir_is_reported() {
+        let config: Config = toml::from_str(&format!("{COMPLETE_CONFIG}{ZAI}")).unwrap();
+        let issues = config.issues();
+        assert!(issues.iter().any(|issue| {
+            issue.key == "provider.zai.harness.claude.config_dir"
+                && issue.message.contains("declares no config_dir")
+        }));
+    }
+
+    #[test]
+    fn a_provider_must_declare_exactly_the_harness_variables() {
+        let config = provider_config(
+            "[provider.zai.harness.claude.config_dir]\nenvironment = \"OTHER_DIR\"\npath = \"~/.config/claude-zai/{context}\"\n",
+        );
+        let issues = config.issues();
+        assert!(issues.iter().any(|issue| {
+            issue.key == "provider.zai.harness.claude.config_dir"
+                && issue.message.contains("CLAUDE_CONFIG_DIR")
+        }));
+
+        let extra = provider_config(
+            "[provider.zai.harness.claude.config_dir.directories]\nCLAUDE_CONFIG_DIR = \"~/.config/claude-zai/{context}\"\nEXTRA_DIR = \"~/.cache/claude-zai/{context}\"\n",
+        );
+        assert!(issue_keys(&extra).contains(&"provider.zai.harness.claude.config_dir".to_string()));
+    }
+
+    #[test]
+    fn a_provider_directory_may_not_be_the_native_directory() {
+        for path in ["~/.config/claude/{context}", "~/.config/claude/{context}/"] {
+            let config = provider_config(&format!(
+                "[provider.zai.harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"{path}\"\n"
+            ));
+            let issues = config.issues();
+            assert!(
+                issues.iter().any(|issue| {
+                    issue.key == "provider.zai.harness.claude.config_dir.path"
+                        && issue.message.contains("own directory")
+                }),
+                "{path}: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_provider_directory_needs_the_context_placeholder_unless_the_harness_has_one_context() {
+        let shared = provider_config(
+            "[provider.zai.harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"~/.config/claude-zai\"\n",
+        );
+        assert!(shared.issues().iter().any(|issue| {
+            issue.key == "provider.zai.harness.claude.config_dir.path"
+                && issue.message.contains("{context}")
+        }));
+
+        let single: Config = toml::from_str(&format!(
+            "{}\n[harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"~/.claude\"\n[provider.zai.harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"~/.claude-zai\"\n",
+            COMPLETE_CONFIG.replace(
+                "[harness.claude]",
+                "[harness.claude]\ncontexts = [\"personal\"]"
+            )
+        ))
+        .unwrap();
+        assert!(single.issues().is_empty(), "{:?}", single.issues());
+    }
+
+    #[test]
+    fn a_fixed_provider_directory_that_matches_one_context_is_reported() {
+        let config = provider_config(
+            "[provider.zai.harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"~/.config/claude/work{context}\"\n",
+        );
+        assert!(
+            config.issues().is_empty(),
+            "work{{context}} never renders to a native path"
+        );
+
+        let single: Config = toml::from_str(&format!(
+            "{}\n[harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"~/.claude\"\n[provider.zai.harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"~/.claude/\"\n",
+            COMPLETE_CONFIG.replace(
+                "[harness.claude]",
+                "[harness.claude]\ncontexts = [\"personal\"]"
+            )
+        ))
+        .unwrap();
+        assert!(
+            single
+                .issues()
+                .iter()
+                .any(|issue| { issue.message.contains("in context `personal`") })
+        );
+    }
+
+    #[test]
+    fn provider_env_may_not_name_an_invalid_or_reserved_variable() {
+        let config = provider_config(
+            "[provider.zai.harness.claude]\nenv = { \"1BAD\" = \"v\", CLAUDE_CONFIG_DIR = \"/tmp\", CLANKER_SESSION_X = \"v\", PATH = \"/bin\" }\n[provider.zai.harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"~/.config/claude-zai/{context}\"\n",
+        );
+        let issues = config.issues();
+        for (variable, message) in [
+            ("1BAD", "invalid environment variable name"),
+            ("CLAUDE_CONFIG_DIR", "computed by clanker"),
+            ("CLANKER_SESSION_X", "computed by clanker"),
+            ("PATH", "computed by clanker"),
+        ] {
+            assert!(
+                issues.iter().any(|issue| {
+                    issue.key == format!("provider.zai.harness.claude.env.{variable}")
+                        && issue.message.contains(message)
+                }),
+                "{variable}: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_provider_and_a_model_for_one_harness_may_not_set_the_same_variable() {
+        let text = format!(
+            "{}\n[harness.claude.config_dir]\nenvironment = \"CLAUDE_CONFIG_DIR\"\npath = \"~/.config/claude/{{context}}\"\n[model.glm]\nharness = \"claude\"\nenv = {{ ANTHROPIC_BASE_URL = \"https://elsewhere\" }}\nharness_args = []\n{ZAI}",
+            COMPLETE_CONFIG.replace("[model]\n", "")
+        );
+        let config: Config = toml::from_str(&text).unwrap();
+        let issues = config.issues();
+        assert!(issues.iter().any(|issue| {
+            issue.key == "provider.zai.harness.claude.env.ANTHROPIC_BASE_URL"
+                && issue.message.contains("model `glm`")
+        }));
     }
 
     #[test]

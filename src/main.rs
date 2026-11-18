@@ -85,6 +85,7 @@ fn runtime_context() -> Result<RuntimeContext, ClankerError> {
         context_environment: environment_text("CLANKER_CONTEXT")?,
         domain_environment: environment_text("CLANKER_DOMAIN")?,
         model_environment: environment_text("CLANKER_MODEL")?,
+        provider_environment: environment_text("CLANKER_PROVIDER")?,
         inherited_path: std::env::var_os("PATH"),
         clanker_environment,
         // Names only. Reading values here would pull every ambient credential

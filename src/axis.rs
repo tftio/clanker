@@ -1,7 +1,7 @@
 //! One precedence rule shared by every launch selection axis.
 //!
-//! Context, domain, and model all resolve the same way: an explicit flag, then
-//! the nearest `.clanker` at or above the working directory, then a
+//! Context, domain, model, and provider all resolve the same way: an explicit
+//! flag, then the nearest `.clanker` at or above the working directory, then a
 //! `CLANKER_<AXIS>` environment variable, then a configured default. Each axis
 //! reports which tier supplied its value so a launch can be explained after the
 //! fact rather than re-derived.
@@ -43,6 +43,17 @@ pub const MODEL: Axis = Axis {
     flag: "--model",
     environment: "CLANKER_MODEL",
     configured_default: "domain.default_model",
+};
+
+/// The provider axis.
+///
+/// Provider has no configured-default tier: an unresolved provider means the
+/// harness's native endpoint and config directories.
+pub const PROVIDER: Axis = Axis {
+    name: "provider",
+    flag: "--provider",
+    environment: "CLANKER_PROVIDER",
+    configured_default: "none",
 };
 
 /// The precedence tier that supplied an axis value.
@@ -248,5 +259,14 @@ mod tests {
             "domain.default_model"
         );
         assert_eq!(AxisSource::CommandLine.label(MODEL), "--model");
+    }
+
+    #[test]
+    fn provider_axis_labels_every_tier() {
+        assert_eq!(AxisSource::CommandLine.label(PROVIDER), "--provider");
+        assert_eq!(AxisSource::Environment.label(PROVIDER), "CLANKER_PROVIDER");
+        assert_eq!(AxisSource::ConfiguredDefault.label(PROVIDER), "none");
+        let error = resolve(PROVIDER, None, None, Some("not a name"), parse, None).unwrap_err();
+        assert_eq!(error.origin, "CLANKER_PROVIDER");
     }
 }

@@ -11,8 +11,9 @@ use crate::launch::{
     SESSION_DOMAIN_SOURCE_ENVIRONMENT, SESSION_DOMAINS_ENVIRONMENT, SESSION_FAMILY_ENVIRONMENT,
     SESSION_HARNESS_ENVIRONMENT, SESSION_ID_ENVIRONMENT, SESSION_INVOCATION_ENVIRONMENT,
     SESSION_MARKER_VALUE, SESSION_MODEL_ENVIRONMENT, SESSION_MODEL_SOURCE_ENVIRONMENT,
-    SESSION_PROJECT_ENVIRONMENT, SESSION_PROJECT_SOURCE_ENVIRONMENT, SESSION_REMOTE_ENVIRONMENT,
-    SESSION_VERSION, SESSION_VERSION_ENVIRONMENT,
+    SESSION_PROJECT_ENVIRONMENT, SESSION_PROJECT_SOURCE_ENVIRONMENT, SESSION_PROVIDER_ENVIRONMENT,
+    SESSION_PROVIDER_SOURCE_ENVIRONMENT, SESSION_REMOTE_ENVIRONMENT, SESSION_VERSION,
+    SESSION_VERSION_ENVIRONMENT,
 };
 
 /// Launch metadata reported by `clanker current`.
@@ -40,6 +41,10 @@ pub struct CurrentSession {
     pub model: Option<String>,
     /// Precedence tier that selected the model.
     pub model_source: Option<String>,
+    /// Resolved provider, when one was selected.
+    pub provider: Option<String>,
+    /// Precedence tier that selected the provider.
+    pub provider_source: Option<String>,
     /// Resolved prompt family, when command mode selected one.
     pub family: Option<String>,
     /// Resolved project slug, when one was resolved.
@@ -87,6 +92,8 @@ impl CurrentSession {
             domain_source: optional_value(environment, SESSION_DOMAIN_SOURCE_ENVIRONMENT)?,
             model: optional_value(environment, SESSION_MODEL_ENVIRONMENT)?,
             model_source: optional_value(environment, SESSION_MODEL_SOURCE_ENVIRONMENT)?,
+            provider: optional_value(environment, SESSION_PROVIDER_ENVIRONMENT)?,
+            provider_source: optional_value(environment, SESSION_PROVIDER_SOURCE_ENVIRONMENT)?,
             family: optional_value(environment, SESSION_FAMILY_ENVIRONMENT)?,
             project: optional_value(environment, SESSION_PROJECT_ENVIRONMENT)?,
             project_source: optional_value(environment, SESSION_PROJECT_SOURCE_ENVIRONMENT)?,
@@ -107,6 +114,8 @@ impl CurrentSession {
             domain_source: None,
             model: None,
             model_source: None,
+            provider: None,
+            provider_source: None,
             family: None,
             project: None,
             project_source: None,
@@ -331,6 +340,42 @@ mod tests {
         assert_eq!(session.project, None);
         assert_eq!(session.project_source, None);
         assert_eq!(session.remote, None);
+    }
+
+    #[test]
+    fn parses_provider_markers_and_treats_empty_as_absent() {
+        let base = [
+            (SESSION_ACTIVE_ENVIRONMENT, SESSION_MARKER_VALUE),
+            (SESSION_VERSION_ENVIRONMENT, SESSION_VERSION),
+            (SESSION_ID_ENVIRONMENT, TEST_SESSION_ID),
+            (SESSION_INVOCATION_ENVIRONMENT, "clanker claude"),
+            (SESSION_HARNESS_ENVIRONMENT, "claude"),
+            (SESSION_CONTEXT_ENVIRONMENT, "work"),
+            (SESSION_CONTEXT_SOURCE_ENVIRONMENT, ".clanker"),
+        ];
+        let mut values = base.to_vec();
+        values.push((SESSION_PROVIDER_ENVIRONMENT, "zai"));
+        values.push((SESSION_PROVIDER_SOURCE_ENVIRONMENT, "--provider"));
+        let session = CurrentSession::from_environment(&environment(&values)).unwrap();
+        assert_eq!(session.provider.as_deref(), Some("zai"));
+        assert_eq!(session.provider_source.as_deref(), Some("--provider"));
+
+        let mut values = base.to_vec();
+        values.push((SESSION_PROVIDER_ENVIRONMENT, ""));
+        values.push((SESSION_PROVIDER_SOURCE_ENVIRONMENT, ""));
+        let session = CurrentSession::from_environment(&environment(&values)).unwrap();
+        assert_eq!(session.provider, None);
+        assert_eq!(session.provider_source, None);
+    }
+
+    #[test]
+    fn version_five_markers_are_unsupported() {
+        let error = CurrentSession::from_environment(&environment(&[
+            (SESSION_ACTIVE_ENVIRONMENT, SESSION_MARKER_VALUE),
+            (SESSION_VERSION_ENVIRONMENT, "5"),
+        ]))
+        .unwrap_err();
+        assert_eq!(error, SessionError::UnsupportedVersion("5".to_string()));
     }
 
     #[test]
