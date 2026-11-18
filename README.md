@@ -55,18 +55,20 @@ structurally-unreachable command guards, and filesystem I/O error-map closures
 that require OS-specific or permission errors cannot be exercised by a genuine,
 network-free, in-process test. The axis resolution, prompt, config, context, and
 session and exec-plan logic is otherwise covered by inline unit tests, and every
-offline command is driven through the binary, keeping actual coverage at 97.03%. See
+offline command is driven through the binary, keeping actual coverage at 97.19%. See
 REPO_INVARIANTS.md RS-007.
 
 ## Selection
 
-Context, domain, and model resolve through one rule: an explicit flag, then the
-nearest `.clanker` at or above the working directory, then `CLANKER_CONTEXT` /
-`CLANKER_DOMAIN` / `CLANKER_MODEL`, then a configured default. Context has no
-configured default — a launch that cannot resolve one refuses to start rather
-than guessing, because context selects the harness config directory and
-therefore its credentials. Only `HOME`, `PATH`, and `CLANKER_`-prefixed
-variables are examined.
+Context, domain, model, and provider resolve through one rule: an explicit flag,
+then the nearest `.clanker` at or above the working directory, then
+`CLANKER_CONTEXT` / `CLANKER_DOMAIN` / `CLANKER_MODEL` / `CLANKER_PROVIDER`, then
+a configured default. Context has no configured default — a launch that cannot
+resolve one refuses to start rather than guessing, because context selects the
+harness config directory and therefore its credentials. Provider has no
+configured default either, but an unresolved provider is not an error: it means
+the harness's own endpoint and directories (see Providers below). Only `HOME`,
+`PATH`, and `CLANKER_`-prefixed variables are examined.
 
 ## Project resolution
 
@@ -171,7 +173,11 @@ clanker exec -- command-a | clanker exec -- command-b
 Context follows the normal precedence rules, with `clanker exec --context work
 -- <argv>` as the explicit form. Clanker prepends `defaults.shim_path` to
 `PATH`, exports `CONTEXT` and `CLANKER_CONTEXT`, and unions the declared
-`config_dir` variables from every harness. A harness without a `config_dir`
+`config_dir` variables from every harness. Provider also follows the normal
+rules, with `clanker exec --provider <name> -- <argv>` as the explicit form;
+when one resolves, clanker exports `CLANKER_PROVIDER`, uses the provider's
+directories for the harnesses it covers, and keeps every other harness's own
+directories. A harness without a `config_dir`
 contributes nothing. If any directory declared by one harness is absent,
 clanker warns on stderr, omits all variables from that harness, and continues
 with the others. Two harnesses resolving the same variable to different paths
@@ -213,11 +219,16 @@ scope can be resolved.
 `clanker exec` mints no identifier and strips an inherited one, as it does with
 every other session marker.
 
+Every launch also exports `CLANKER_SESSION_PROVIDER` and
+`CLANKER_SESSION_PROVIDER_SOURCE`, empty when no provider resolved, and
+`clanker current` reports them as `provider` and `provider_source`.
+
 The marker set is versioned by `CLANKER_SESSION_VERSION`, and `clanker current`
 accepts only the version it was built for. Adding the identifier moved that
-contract from 3 to 4; adding the project markers moved it from 4 to 5, so a
-harness session launched by an older clanker reports `unsupported clanker
-session marker version` until it is relaunched. That is the version check
+contract from 3 to 4; adding the project markers moved it from 4 to 5; adding
+the provider markers moved it from 5 to 6. A harness session launched by an
+older clanker reports `unsupported clanker session marker version` until it is
+relaunched. That is the version check
 working; relaunching the session clears it.
 
 ## Harness config directories
@@ -251,6 +262,70 @@ so creating an empty one would turn a misconfiguration into a session with no
 credentials and no explanation. Under `clanker exec`, the same all-or-nothing
 rule applies per harness; a missing directory warns and omits that harness's
 whole set without blocking variables from other harnesses.
+
+## Providers
+
+<!-- AGENT_GENERATED: true; AGENT_MODEL: claude-opus-5-5; AGENT_DATE: 2026-11-18 -->
+
+A provider runs a harness against a different inference endpoint, in any
+context, with its own config directories. For example, Claude Code can run
+against Z.ai's Anthropic-compatible endpoint in both the `personal` and `work`
+contexts while keeping its sessions, settings, and credentials apart from the
+native Claude Code directories for the same context.
+
+The base configuration defines no providers. Declare them in a local overlay,
+one table per harness the provider covers:
+
+```toml
+[provider.zai.harness.claude]
+env = { ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic", ANTHROPIC_DEFAULT_OPUS_MODEL = "glm-5.3", ANTHROPIC_DEFAULT_SONNET_MODEL = "glm-5.3", ANTHROPIC_DEFAULT_HAIKU_MODEL = "glm-5.3-flash" }
+harness_args = []
+
+[provider.zai.harness.claude.config_dir]
+environment = "CLAUDE_CONFIG_DIR"
+path = "~/.config/claude-zai/{context}"
+```
+
+Select it like any other axis: `clanker claude --provider zai`, a
+`provider = "zai"` line in a `.clanker`, or `CLANKER_PROVIDER=zai`. With no
+provider, a launch is unchanged.
+
+`config_dir` is required and uses either directory shape. It must declare
+exactly the variables the harness's own `config_dir` declares, follows the same
+`{context}` rule, and must not resolve to the harness's own directory for any
+context the harness supports; `clanker doctor` reports any of these as a
+configuration error. The directory must already exist, and a launch whose
+provider directory is missing fails without exporting anything, as a launch
+with a missing context directory does.
+
+`env` and `harness_args` are optional literal values. Provider `env` is subject
+to the same name and reservation checks as model `env`, and a provider and a
+model for the same harness may not set the same variable. The launch order is:
+harness `default_args`, the injected prompt, provider `harness_args`, model
+`harness_args`, then passthrough. Environment is applied domain, then provider,
+then model.
+
+Selecting a provider that does not cover the launched harness is an error
+rather than a fall back to the harness's own endpoint. A launch that resolved a
+provider exports `CLANKER_PROVIDER`, so a `clanker` started inside the session
+resolves the same one. Symlink mode (`<harness>-launch`) resolves the provider
+from `.clanker` and `CLANKER_PROVIDER`.
+
+Credentials do not belong in provider `env` or `harness_args`, which are
+literal values in a file. For Claude Code, put an `apiKeyHelper` in the
+provider directory's own `settings.json`; Claude Code runs it when it needs a
+credential, and it outranks a claude.ai login. For example, with the key in a
+sops document:
+
+```json
+{
+  "apiKeyHelper": "sops -d --extract '[\"env\"][\"ZAI_API_KEY\"]' \"$HOME/.config/sops/secrets.sops.yaml\""
+}
+```
+
+Each provider directory is a separate Claude Code configuration, so plugins,
+hooks, and skills are installed into it separately, for example with
+`clanker exec --provider zai -- claude plugin install <plugin>`.
 
 ## Playwright MCP profiles
 

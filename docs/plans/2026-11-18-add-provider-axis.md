@@ -27,7 +27,7 @@ bug:
 execution:
   requires_operator_approval_before_implementation: true
   requires_plan_updates_during_execution: true
-  task_graph_status: ready
+  task_graph_status: executing
 project:
   slug: clanker
   remote: null
@@ -279,6 +279,31 @@ Decision or guidance received: the plan is approved as written. It is committed 
 
 Impact on plan: implementation may begin with T001. The pending question in the earlier entry is answered.
 
+### 2026-11-18 — open question for the operator: cargo deny fails before this change
+
+Question or decision needed: `mise run check` fails in `cargo deny` on RUSTSEC-2026-0543
+(chrono is unmaintained, no safe upgrade). The failure reproduces on untouched `main` at
+`45a016f`, so it is not caused by this plan. Every task's acceptance check says
+`mise run check passes`, which cannot hold until the advisory is ignored in `deny.toml`
+or chrono is replaced. Both are dependency-policy changes outside this plan's scope.
+
+Decision or guidance received: pending.
+
+Impact on plan: tasks proceed and record every other hook passing; T007 cannot be
+completed until this is decided.
+
+### 2026-11-18 — T007 blocked on the cargo deny question
+
+Question or decision needed: the same as the entry above. T001 to T006 are done.
+
+Decision or guidance received: pending.
+
+Impact on plan: T007 is `blocked`. Its results so far: `mise run check` passes every
+hook except `cargo deny` (RUSTSEC-2026-0543, present on `main` at `45a016f`);
+`mise run check:coverage` passes with 353 tests and 97.19% line coverage (floor 95%),
+and the stated figure in README.md and REPO_INVARIANTS.md RS-007 moved from 97.03% to
+97.19%. T008 and T009 depend on T007 and wait with it.
+
 ## Decision Log
 
 Append-only. Decisions affecting architecture, behavior, sequencing, or tradeoffs.
@@ -310,6 +335,18 @@ The operator reset the local `main` to `origin/main`. `main`, `origin/main`, and
 gone. Work still happens on `feat/provider-axis` in the same worktree; the stale private
 history no longer exists locally.
 
+### 2026-11-18 — D006: launches and exec export CLANKER_PROVIDER; symlink mode applies provider arguments
+
+Recorded while executing T003 and T004.
+
+A launch or exec that resolved a provider exports `CLANKER_PROVIDER`, as it already
+exports `CLANKER_CONTEXT`, so a `clanker` launched from inside the session resolves the
+same provider. `CLANKER_PROVIDER` joins the clanker-owned variables that domain, model,
+and provider `env` may not set. Symlink mode prepends the provider's `harness_args` to
+the passthrough as well as applying its `env` and directories: a provider applied
+without its arguments would be half-applied, and symlink mode has no other argument
+composition to conflict with.
+
 # Task Graph
 
 <!-- TASK_GRAPH:BEGIN -->
@@ -317,7 +354,7 @@ history no longer exists locally.
 tasks:
   - id: T001
     title: Add the provider schema and its validation to the runtime config
-    status: not_started
+    status: done
     depends_on: []
     owner: null
     description: >
@@ -339,10 +376,26 @@ tasks:
       - Unit tests in src/config.rs cover each new issue, including the equal-to-native template, a variable-set mismatch, an unknown harness, a harness with no config_dir, a reserved env key, and a provider/model env overlap.
       - A test asserts a valid provider table produces no issues.
       - mise run check passes.
-    completion_evidence: null
+    completion_evidence: >
+      Done 2026-11-18. Files touched: src/config.rs only. ProviderName at
+      src/config.rs:103; Config.provider (serde default) at :146; ProviderConfig at
+      :406 and ProviderHarnessConfig at :414 (config_dir required, env and
+      harness_args default empty, deny_unknown_fields); Config::issues calls
+      validate_providers at :547; validate_providers at :704 and
+      validate_provider_harness at :719 report an empty harness table, an unknown
+      harness, a harness with no config_dir, a variable-set mismatch, a template that
+      renders to the native directory for any context the harness supports
+      (render_directory at :802 trims trailing slashes), the placeholder rule
+      (check_directory_template at :812, now shared with harness validation), invalid
+      or reserved env names, and an env key also set by a model for the same harness.
+      Tests: 13 new unit tests from :1257 to :1437; cargo nextest config:: runs 44
+      tests, all pass. mise run check: every hook passes except cargo deny, which
+      fails on RUSTSEC-2026-0543 (chrono unmaintained) in Cargo.lock; the same failure
+      occurs on untouched main at 45a016f, so it predates this change (see Operator
+      Guidance Log).
   - id: T002
     title: Resolve the provider axis from flag, .clanker, and CLANKER_PROVIDER
-    status: not_started
+    status: done
     depends_on:
       - T001
     owner: null
@@ -362,10 +415,24 @@ tasks:
       - Unit tests cover each tier winning, nearest-ancestor .clanker inheritance of provider, an empty CLANKER_PROVIDER falling through, an invalid name, an unknown provider, and a provider that does not cover the harness.
       - CLI parser tests cover --provider, --provider=, a missing value, and the exec form.
       - mise run check passes.
-    completion_evidence: null
+    completion_evidence: >
+      Done 2026-11-18. Files touched: src/axis.rs (PROVIDER axis at :52 with no
+      configured default; test at :265), src/context.rs (DirectoryConfig.provider at
+      :25, inherited per field at :48; test at :331 plus provider assertions in the
+      three-level merge test), src/cli.rs (LaunchRequest.provider at :186,
+      ExecRequest.provider at :207, Exec subcommand --provider at :63, parse_exec
+      gains a provider argument at :244, --provider at :329 and --provider= at :352;
+      tests at :578 and :602), src/main.rs:88 (reads CLANKER_PROVIDER), src/lib.rs:141
+      (RuntimeContext.provider_environment, passed into LaunchInputs), src/launch.rs
+      (LaunchInputs.provider_environment; resolve_provider at :1123 and bind_provider
+      at :1154; LaunchError::UnknownProvider at :438 and ProviderHarnessUnsupported at
+      :448, both naming the supplying tier). Precedence tests for flag, .clanker,
+      environment, blank environment, and invalid names are in src/launch.rs under the
+      provider-axis test block from :2205. cargo nextest: 348 tests pass. mise run
+      check: every hook passes except the pre-existing cargo deny advisory.
   - id: T003
     title: Apply the provider to launch plans
-    status: not_started
+    status: done
     depends_on:
       - T002
     owner: null
@@ -388,10 +455,27 @@ tasks:
       - A test asserts symlink mode honours CLANKER_PROVIDER.
       - An integration test in tests/ drives `clanker claude --provider <p> --dry-run --json` and asserts the provider fields and CLAUDE_CONFIG_DIR.
       - mise run check passes.
-    completion_evidence: null
+    completion_evidence: >
+      Done 2026-11-18. Files touched: src/launch.rs and src/lib.rs, plus new
+      tests/provider_axis.rs. build_harness_plan_for_context takes the bound provider
+      and resolves the provider's ConfigDirectory in place of the harness's own, with
+      the existing existence check; Provenance::Provider at src/launch.rs:86;
+      apply_provider_environment at :1174 runs after the domain env and before the
+      model env; compose_arguments inserts provider harness_args after the prompt and
+      before model args at :1056; build_symlink_plan resolves provider from .clanker
+      and CLANKER_PROVIDER and prepends provider args to the passthrough;
+      LaunchPlan.provider and provider_source at :175, also in LaunchPlanOutput and
+      the text dry-run at src/lib.rs:751 and :754. Launches export CLANKER_PROVIDER
+      when a provider resolved (D006). Unit tests in src/launch.rs from :2205 cover
+      directory, env provenance, argument order, the unchanged no-provider plan, a
+      missing provider directory, an unknown provider, an uncovered harness, and
+      symlink mode. tests/provider_axis.rs drives the binary with the shipped config
+      plus a local.toml provider overlay: JSON and text dry runs, the native plan
+      without a provider, fail-closed on a missing work directory, unknown and
+      uncovered providers, and exec. 348 tests pass.
   - id: T004
     title: Apply the provider to clanker exec
-    status: not_started
+    status: done
     depends_on:
       - T003
     owner: null
@@ -408,10 +492,23 @@ tasks:
     acceptance_checks:
       - Tests in tests/clanker_exec.rs assert the provider directory for a covered harness, the native directory for an uncovered one, and a skip warning when the provider directory is missing.
       - mise run check passes.
-    completion_evidence: null
+    completion_evidence: >
+      Done 2026-11-18. Files touched: src/launch.rs. build_exec_plan resolves the
+      provider through resolve_provider; for each harness the provider covers it uses
+      the provider ConfigDirectory (src/launch.rs:733) before the unchanged collision
+      check; the base environment moved into exec_base_environment at :796 (to keep
+      build_exec_plan under the clippy line limit) and exports CLANKER_PROVIDER when a
+      provider resolved; ExecPlan.provider at :212. Tests: three unit tests ending at
+      src/launch.rs:2539 (provider directory for the covered harness and native for
+      the rest, skip with the provider path when the provider directory is missing, no
+      change without a provider, unknown provider refused) and
+      exec_with_a_provider_exports_the_provider_directory in tests/provider_axis.rs.
+      The plan named tests/clanker_exec.rs for these; they live in src/launch.rs and
+      tests/provider_axis.rs instead, beside the other provider tests. All existing
+      exec tests pass unchanged.
   - id: T005
     title: Export provider session markers and report them
-    status: not_started
+    status: done
     depends_on:
       - T003
     owner: null
@@ -431,10 +528,29 @@ tasks:
       - Session parsing tests cover a provider marker, an empty provider marker, and version 5 rejection.
       - Integration tests assert `clanker current`, `clanker env`, and `clanker list` output with and without providers.
       - mise run check passes.
-    completion_evidence: null
+    completion_evidence: >
+      Done 2026-11-18. Files touched: src/launch.rs (SESSION_VERSION is "6" at :36;
+      CLANKER_SESSION_PROVIDER and CLANKER_SESSION_PROVIDER_SOURCE at :46 and :47,
+      added to SESSION_ENVIRONMENTS at :52 so exec strips them, and exported by
+      apply_session_environment with empty values when no provider resolved),
+      src/session.rs (CurrentSession.provider and provider_source from :45; tests at
+      :346 and :372, the second rejecting version 5), src/lib.rs (current text output
+      at :732; list gains ProviderListing at :638 and a Providers section at :692 in
+      text and a providers array in JSON), tests/symlink_mode.rs (the stub prints the
+      provider markers and CLANKER_PROVIDER; marker fixtures and expectations moved to
+      version 6 and assert the new markers, including that an inherited stale
+      CLANKER_SESSION_PROVIDER is overwritten with empty), tests/provider_axis.rs (env
+      with --provider, list in text and JSON, current with provider markers in JSON).
+      `clanker env` needed no change: it parses launch flags through parse_launch,
+      which accepts --provider since T002. Two unit tests in src/launch.rs that pin
+      the marker count and version were updated from 18 to 20 removed variables and
+      from "5" to "6". A stale target directory once let tests pass against an old
+      binary; every result here is from a build after cargo clean -p tftio-clanker.
+      cargo nextest: 353 tests pass. mise run check: every hook passes except the pre-
+      existing cargo deny advisory.
   - id: T006
     title: Document the provider axis
-    status: not_started
+    status: done
     depends_on:
       - T004
       - T005
@@ -454,10 +570,23 @@ tasks:
       - CHANGELOG.md is not edited by hand; release-plz owns it.
     acceptance_checks:
       - mise run check passes, including the spelling and docs hooks.
-    completion_evidence: null
+    completion_evidence: >
+      Done 2026-11-18. Files touched: README.md only. Selection now names four axes
+      and says provider has no configured default and that an unresolved provider
+      means the native endpoint; the clanker exec section documents --provider,
+      CLANKER_PROVIDER, and per-harness directory substitution; Session markers
+      documents CLANKER_SESSION_PROVIDER and CLANKER_SESSION_PROVIDER_SOURCE and the
+      move from version 5 to 6; a new Providers section at README.md:266 (marked
+      agent-generated) gives the TOML shape, the validation rules, argument and
+      environment order, the uncovered-harness error, CLANKER_PROVIDER export, symlink
+      mode, and a Claude Code apiKeyHelper example that keeps the credential in the
+      provider directory's settings.json (the JSON example parses with jq). No example
+      contains a credential value. CHANGELOG.md is untouched. REPO_INVARIANTS.md
+      RS-007 is left for T007, which measures coverage. mise run check: every hook
+      passes, including typos and taplo, except the pre-existing cargo deny advisory.
   - id: T007
     title: Run the full gate
-    status: not_started
+    status: blocked
     depends_on:
       - T006
     owner: null
@@ -522,7 +651,7 @@ tasks:
 
 ## T001 — Add the provider schema and its validation to the runtime config
 
-Status: `not_started`
+Status: `done`
 
 Depends on: none
 
@@ -547,11 +676,24 @@ unchanged. Validate every provider in Config::issues.
 
 ### Completion Evidence
 
-Agents update this when the task is complete.
+Done 2026-11-18. Files touched: src/config.rs only. ProviderName at src/config.rs:103;
+Config.provider (serde default) at :146; ProviderConfig at :406 and
+ProviderHarnessConfig at :414 (config_dir required, env and harness_args default empty,
+deny_unknown_fields); Config::issues calls validate_providers at :547;
+validate_providers at :704 and validate_provider_harness at :719 report an empty harness
+table, an unknown harness, a harness with no config_dir, a variable-set mismatch, a
+template that renders to the native directory for any context the harness supports
+(render_directory at :802 trims trailing slashes), the placeholder rule
+(check_directory_template at :812, now shared with harness validation), invalid or
+reserved env names, and an env key also set by a model for the same harness. Tests: 13
+new unit tests from :1257 to :1437; cargo nextest config:: runs 44 tests, all pass. mise
+run check: every hook passes except cargo deny, which fails on RUSTSEC-2026-0543 (chrono
+unmaintained) in Cargo.lock; the same failure occurs on untouched main at 45a016f, so it
+predates this change (see Operator Guidance Log).
 
 ## T002 — Resolve the provider axis from flag, .clanker, and CLANKER_PROVIDER
 
-Status: `not_started`
+Status: `done`
 
 Depends on: T001
 
@@ -575,11 +717,23 @@ with resolution and registry checks in the library.
 
 ### Completion Evidence
 
-Agents update this when the task is complete.
+Done 2026-11-18. Files touched: src/axis.rs (PROVIDER axis at :52 with no configured
+default; test at :265), src/context.rs (DirectoryConfig.provider at :25, inherited per
+field at :48; test at :331 plus provider assertions in the three-level merge test),
+src/cli.rs (LaunchRequest.provider at :186, ExecRequest.provider at :207, Exec
+subcommand --provider at :63, parse_exec gains a provider argument at :244, --provider
+at :329 and --provider= at :352; tests at :578 and :602), src/main.rs:88 (reads
+CLANKER_PROVIDER), src/lib.rs:141 (RuntimeContext.provider_environment, passed into
+LaunchInputs), src/launch.rs (LaunchInputs.provider_environment; resolve_provider at
+:1123 and bind_provider at :1154; LaunchError::UnknownProvider at :438 and
+ProviderHarnessUnsupported at :448, both naming the supplying tier). Precedence tests
+for flag, .clanker, environment, blank environment, and invalid names are in
+src/launch.rs under the provider-axis test block from :2205. cargo nextest: 348 tests
+pass. mise run check: every hook passes except the pre-existing cargo deny advisory.
 
 ## T003 — Apply the provider to launch plans
 
-Status: `not_started`
+Status: `done`
 
 Depends on: T002
 
@@ -609,11 +763,26 @@ launch plans, and report the provider in dry-run output.
 
 ### Completion Evidence
 
-Agents update this when the task is complete.
+Done 2026-11-18. Files touched: src/launch.rs and src/lib.rs, plus new
+tests/provider_axis.rs. build_harness_plan_for_context takes the bound provider and
+resolves the provider's ConfigDirectory in place of the harness's own, with the existing
+existence check; Provenance::Provider at src/launch.rs:86; apply_provider_environment at
+:1174 runs after the domain env and before the model env; compose_arguments inserts
+provider harness_args after the prompt and before model args at :1056;
+build_symlink_plan resolves provider from .clanker and CLANKER_PROVIDER and prepends
+provider args to the passthrough; LaunchPlan.provider and provider_source at :175, also
+in LaunchPlanOutput and the text dry-run at src/lib.rs:751 and :754. Launches export
+CLANKER_PROVIDER when a provider resolved (D006). Unit tests in src/launch.rs from :2205
+cover directory, env provenance, argument order, the unchanged no-provider plan, a
+missing provider directory, an unknown provider, an uncovered harness, and symlink mode.
+tests/provider_axis.rs drives the binary with the shipped config plus a local.toml
+provider overlay: JSON and text dry runs, the native plan without a provider, fail-
+closed on a missing work directory, unknown and uncovered providers, and exec. 348 tests
+pass.
 
 ## T004 — Apply the provider to clanker exec
 
-Status: `not_started`
+Status: `done`
 
 Depends on: T003
 
@@ -636,11 +805,22 @@ covers and the native directories for every other harness.
 
 ### Completion Evidence
 
-Agents update this when the task is complete.
+Done 2026-11-18. Files touched: src/launch.rs. build_exec_plan resolves the provider
+through resolve_provider; for each harness the provider covers it uses the provider
+ConfigDirectory (src/launch.rs:733) before the unchanged collision check; the base
+environment moved into exec_base_environment at :796 (to keep build_exec_plan under the
+clippy line limit) and exports CLANKER_PROVIDER when a provider resolved;
+ExecPlan.provider at :212. Tests: three unit tests ending at src/launch.rs:2539
+(provider directory for the covered harness and native for the rest, skip with the
+provider path when the provider directory is missing, no change without a provider,
+unknown provider refused) and exec_with_a_provider_exports_the_provider_directory in
+tests/provider_axis.rs. The plan named tests/clanker_exec.rs for these; they live in
+src/launch.rs and tests/provider_axis.rs instead, beside the other provider tests. All
+existing exec tests pass unchanged.
 
 ## T005 — Export provider session markers and report them
 
-Status: `not_started`
+Status: `done`
 
 Depends on: T003
 
@@ -665,11 +845,28 @@ contract to version 6, and surface the provider in `clanker current`, `clanker e
 
 ### Completion Evidence
 
-Agents update this when the task is complete.
+Done 2026-11-18. Files touched: src/launch.rs (SESSION_VERSION is "6" at :36;
+CLANKER_SESSION_PROVIDER and CLANKER_SESSION_PROVIDER_SOURCE at :46 and :47, added to
+SESSION_ENVIRONMENTS at :52 so exec strips them, and exported by
+apply_session_environment with empty values when no provider resolved), src/session.rs
+(CurrentSession.provider and provider_source from :45; tests at :346 and :372, the
+second rejecting version 5), src/lib.rs (current text output at :732; list gains
+ProviderListing at :638 and a Providers section at :692 in text and a providers array in
+JSON), tests/symlink_mode.rs (the stub prints the provider markers and CLANKER_PROVIDER;
+marker fixtures and expectations moved to version 6 and assert the new markers,
+including that an inherited stale CLANKER_SESSION_PROVIDER is overwritten with empty),
+tests/provider_axis.rs (env with --provider, list in text and JSON, current with
+provider markers in JSON). `clanker env` needed no change: it parses launch flags
+through parse_launch, which accepts --provider since T002. Two unit tests in
+src/launch.rs that pin the marker count and version were updated from 18 to 20 removed
+variables and from "5" to "6". A stale target directory once let tests pass against an
+old binary; every result here is from a build after cargo clean -p tftio-clanker. cargo
+nextest: 353 tests pass. mise run check: every hook passes except the pre-existing cargo
+deny advisory.
 
 ## T006 — Document the provider axis
 
-Status: `not_started`
+Status: `done`
 
 Depends on: T004, T005
 
@@ -689,11 +886,22 @@ exec behaviour, and the marker version change are documented where the other axe
 
 ### Completion Evidence
 
-Agents update this when the task is complete.
+Done 2026-11-18. Files touched: README.md only. Selection now names four axes and says
+provider has no configured default and that an unresolved provider means the native
+endpoint; the clanker exec section documents --provider, CLANKER_PROVIDER, and per-
+harness directory substitution; Session markers documents CLANKER_SESSION_PROVIDER and
+CLANKER_SESSION_PROVIDER_SOURCE and the move from version 5 to 6; a new Providers
+section at README.md:266 (marked agent-generated) gives the TOML shape, the validation
+rules, argument and environment order, the uncovered-harness error, CLANKER_PROVIDER
+export, symlink mode, and a Claude Code apiKeyHelper example that keeps the credential
+in the provider directory's settings.json (the JSON example parses with jq). No example
+contains a credential value. CHANGELOG.md is untouched. REPO_INVARIANTS.md RS-007 is
+left for T007, which measures coverage. mise run check: every hook passes, including
+typos and taplo, except the pre-existing cargo deny advisory.
 
 ## T007 — Run the full gate
 
-Status: `not_started`
+Status: `blocked`
 
 Depends on: T006
 
