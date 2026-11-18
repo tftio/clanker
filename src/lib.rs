@@ -17,6 +17,7 @@ pub mod context;
 pub mod doctor;
 pub mod error;
 pub mod launch;
+pub mod layout;
 pub mod prompt;
 pub mod promptlib;
 mod session;
@@ -26,7 +27,8 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use cli::{
-    Cli, Command, ProjectCommand, PromptCommand, parse_exec, parse_external_launch, parse_launch,
+    Cli, Command, ConfigCommand, ProjectCommand, PromptCommand, parse_exec, parse_external_launch,
+    parse_launch,
 };
 use config::{LoadedConfig, load_config};
 use doctor::{Doctor, DoctorInputs};
@@ -275,6 +277,7 @@ fn metadata_command(cli: &Cli) -> Option<StandardCommand> {
         | Command::Current
         | Command::Env { .. }
         | Command::Exec { .. }
+        | Command::Config { .. }
         | Command::Project { .. }
         | Command::Prompt { .. }
         | Command::Harness(_) => None,
@@ -290,6 +293,7 @@ fn run_command(cli: Cli, runtime: &RuntimeContext) -> Result<i32, FatalCliError>
         Command::Current => "current",
         Command::Env { .. } => "env",
         Command::Exec { .. } => "exec",
+        Command::Config { .. } => "config",
         Command::Project { .. } => "project",
         Command::Prompt { .. } => "prompt",
         Command::Harness(_) => "launch",
@@ -332,6 +336,7 @@ fn run_command_inner(
             provider,
             argv,
         } => run_exec(context, provider, argv, cli.config.as_deref(), runtime),
+        Command::Config { command } => run_config(command, cli.config.as_deref(), runtime, output),
         Command::Project { command } => run_project(command, runtime, output),
         Command::Prompt { command } => {
             run_prompt_command(command, cli.config.as_deref(), runtime, output)
@@ -507,6 +512,81 @@ fn run_exec(
         );
     }
     execute_plan(&plan).map_err(Into::into)
+}
+
+fn run_config(
+    command: ConfigCommand,
+    explicit_config: Option<&Path>,
+    runtime: &RuntimeContext,
+    output: JsonOutput,
+) -> Result<i32, ClankerError> {
+    match command {
+        ConfigCommand::Dirs { context, provider } => {
+            let loaded = load_runtime_config(runtime, explicit_config)?;
+            let entries = layout::directories(
+                &loaded.config,
+                runtime.home.as_deref(),
+                layout::Filter {
+                    context: context.as_deref(),
+                    provider: provider.as_deref(),
+                },
+            )?;
+            emit_config_dirs(&entries, output)?;
+            Ok(0)
+        }
+    }
+}
+
+/// Serializable projection of one resolved configuration directory.
+#[derive(Debug, Serialize)]
+struct ConfigDirectoryOutput {
+    harness: String,
+    context: String,
+    provider: Option<String>,
+    variable: String,
+    path: String,
+    exists: bool,
+}
+
+fn emit_config_dirs(
+    entries: &[layout::DirectoryEntry],
+    output: JsonOutput,
+) -> Result<(), ClankerError> {
+    if output.is_json() {
+        let rows: Vec<ConfigDirectoryOutput> = entries
+            .iter()
+            .map(|entry| ConfigDirectoryOutput {
+                harness: entry.harness.to_string(),
+                context: entry.context.to_string(),
+                provider: entry.provider.as_ref().map(ToString::to_string),
+                variable: entry.variable.clone(),
+                path: entry.path.display().to_string(),
+                exists: entry.exists,
+            })
+            .collect();
+        let data = serde_json::to_value(&rows)?;
+        println!(
+            "{}",
+            render_response("config dirs", JsonOutput::Json, data, String::new())
+        );
+        return Ok(());
+    }
+
+    for entry in entries {
+        println!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            entry.harness,
+            entry.context,
+            entry
+                .provider
+                .as_ref()
+                .map_or_else(String::new, ToString::to_string),
+            entry.variable,
+            entry.path.display(),
+            entry.exists
+        );
+    }
+    Ok(())
 }
 
 fn run_project(

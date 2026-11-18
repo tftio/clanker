@@ -65,6 +65,12 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         argv: Vec<OsString>,
     },
+    /// Report the resolved harness configuration layout.
+    Config {
+        /// Configuration-inspection operation to run.
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Resolve or list projects known to the project registry.
     Project {
         /// Project operation to run.
@@ -85,6 +91,27 @@ pub enum Command {
     /// Launch a configured harness. The first value is its name.
     #[command(external_subcommand)]
     Harness(Vec<OsString>),
+}
+
+/// Configuration-inspection operations.
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    /// List every resolved harness configuration directory.
+    ///
+    /// One row per harness, context, provider, and declared variable. Native
+    /// directories and every provider-derived directory are included, whether
+    /// or not the path exists. Text output is one tab-separated line:
+    /// `<harness>\t<context>\t<provider>\t<variable>\t<path>\t<exists>`, with
+    /// an empty provider for a native directory. The command is read-only and
+    /// creates nothing.
+    Dirs {
+        /// Include only this context.
+        #[arg(long, value_name = "CONTEXT")]
+        context: Option<String>,
+        /// Include only rows derived for this provider.
+        #[arg(long, value_name = "PROVIDER")]
+        provider: Option<String>,
+    },
 }
 
 /// Project registry operations.

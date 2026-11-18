@@ -45,4 +45,7 @@ pub enum ClankerError {
     /// Discovering a directory's project declaration or origin remote failed.
     #[error(transparent)]
     ProjectDiscovery(#[from] tftio_lib::project::DiscoveryError),
+    /// Resolving the configuration-directory layout failed.
+    #[error(transparent)]
+    Layout(#[from] crate::layout::LayoutError),
 }
