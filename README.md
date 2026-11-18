@@ -55,7 +55,7 @@ structurally-unreachable command guards, and filesystem I/O error-map closures
 that require OS-specific or permission errors cannot be exercised by a genuine,
 network-free, in-process test. The axis resolution, prompt, config, context, and
 session and exec-plan logic is otherwise covered by inline unit tests, and every
-offline command is driven through the binary, keeping actual coverage at 97.19%. See
+offline command is driven through the binary, keeping actual coverage at 97.12%. See
 REPO_INVARIANTS.md RS-007.
 
 ## Selection

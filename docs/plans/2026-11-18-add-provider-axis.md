@@ -616,7 +616,7 @@ tasks:
       passes, including typos and taplo, except the pre-existing cargo deny advisory.
   - id: T007
     title: Run the full gate
-    status: not_started
+    status: done
     depends_on:
       - T006
       - T010
@@ -632,7 +632,17 @@ tasks:
       - Coverage stays at or above the 95% floor without new allow attributes.
     acceptance_checks:
       - mise run ci exits 0.
-    completion_evidence: null
+    completion_evidence: >
+      Done 2026-11-18. Ran after cargo clean -p tftio-clanker, at commit b4bcfa9 plus
+      this coverage update. mise run ci exited 0: all 18 check hooks passed (fmt,
+      taplo, shellcheck, typos, gitleaks history and staged, clippy, nextest, doc,
+      machete, audit, deny, package, lockfiles, clanker doctor on the base config, and
+      the file checks), and check:coverage ran 358 tests, all passing, with 97.12%
+      line coverage against the 95% floor. No test was skipped, ignored, or deleted,
+      and no allow attribute was added. The stated coverage in README.md:58 and
+      REPO_INVARIANTS.md RS-007 changed from 97.19% to 97.12%. mise rewrites one
+      checksum_source line in mise.lock on every run; that change is reverted and not
+      committed.
   - id: T008
     title: Regenerate agent-content eval goldens against the new binary
     status: not_started
@@ -1011,7 +1021,7 @@ typos and taplo, except the pre-existing cargo deny advisory.
 
 ## T007 — Run the full gate
 
-Status: `not_started`
+Status: `done`
 
 Depends on: T006, T010, T011
 
@@ -1030,7 +1040,15 @@ Run the repository's CI gate locally and record the results.
 
 ### Completion Evidence
 
-Agents update this when the task is complete.
+Done 2026-11-18. Ran after cargo clean -p tftio-clanker, at commit b4bcfa9 plus this
+coverage update. mise run ci exited 0: all 18 check hooks passed (fmt, taplo,
+shellcheck, typos, gitleaks history and staged, clippy, nextest, doc, machete, audit,
+deny, package, lockfiles, clanker doctor on the base config, and the file checks), and
+check:coverage ran 358 tests, all passing, with 97.12% line coverage against the 95%
+floor. No test was skipped, ignored, or deleted, and no allow attribute was added. The
+stated coverage in README.md:58 and REPO_INVARIANTS.md RS-007 changed from 97.19% to
+97.12%. mise rewrites one checksum_source line in mise.lock on every run; that change is
+reverted and not committed.
 
 ## T008 — Regenerate agent-content eval goldens against the new binary
 
