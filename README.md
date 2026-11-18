@@ -120,18 +120,19 @@ A machine-specific overlay goes in a sibling `local.toml` next to wherever
 are replaced, tables merge recursively) and is silently absent otherwise; no
 code change is needed to add or remove an overlay.
 
-## Pi (single context)
+## Pi
 
-<!-- AGENT_GENERATED: true; AGENT_MODEL: gpt-6-astra; AGENT_DATE: 2026-09-21 -->
+<!-- AGENT_GENERATED: true; AGENT_MODEL: gpt-6-astra (2026-09-21), claude-opus-5-5 (2026-11-18); AGENT_DATE: 2026-11-18 -->
 
-Pi keeps all of its state in one directory, so the shipped config restricts it
-to the `personal` context: `clanker pi --context personal` uses
-`PI_CODING_AGENT_DIR=~/.pi/agent`, preserving Pi's existing provider
-definitions, auth, settings, and sessions. Pi launches in any other context
-fail, including `pi-launch` symlink mode. The shipped config uses the
-`deepseek` prompt family, which falls back to neutral fragments when no variant
-exists; it appends the composed prompt by file and does not force a model.
-Use Pi's own model selector or pass native flags after `--`.
+Pi reads its providers, auth, settings, and sessions from the directory named
+by `PI_CODING_AGENT_DIR`, so the shipped config gives each context its own:
+`clanker pi --context work` uses `PI_CODING_AGENT_DIR=~/.config/pi/work`. As
+with the other harnesses, the directory must already exist; a launch into a
+missing one fails. Pi's own default, `~/.pi/agent`, is not used; to keep an
+existing setup, copy or move it to `~/.config/pi/<context>`. The shipped config
+uses the `deepseek` prompt family, which falls back to neutral fragments when
+no variant exists; it appends the composed prompt by file and does not force a
+model. Use Pi's own model selector or pass native flags after `--`.
 
 Harness `contexts` is an optional nonempty, unique subset of `defaults.contexts`.
 Omitting it preserves all-context behavior. A fixed `config_dir.path` without
@@ -293,7 +294,7 @@ path component:
 | `~/.config/claude/{context}` | `~/.config/claude-zai/{context}` |
 | `~/.config/codex/{context}` | `~/.config/codex-zai/{context}` |
 | `~/.c/x-{context}` (context inside a component) | `~/.c/x-{context}-zai` |
-| `~/.pi/agent` (fixed, single-context harness) | `~/.pi/agent-zai` |
+| `~/.config/tool` (fixed, single-context harness) | `~/.config/tool-zai` |
 
 When `{context}` is a whole component, the component before it gains the
 suffix; when it sits inside a component, or directly under `~`, that component
