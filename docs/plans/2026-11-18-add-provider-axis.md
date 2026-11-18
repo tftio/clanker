@@ -708,7 +708,7 @@ tasks:
       including cargo deny, cargo audit, and cargo machete.
   - id: T011
     title: Derive provider directories from the harness templates
-    status: not_started
+    status: done
     depends_on: []
     owner: null
     description: >
@@ -731,7 +731,29 @@ tasks:
       - Unit tests cover the three derivation cases and both directory shapes.
       - An integration test launches claude and codex with an empty provider table and asserts each derived directory.
       - mise run check passes apart from any failure T010 has not yet removed.
-    completion_evidence: null
+    completion_evidence: >
+      Done 2026-11-18. Files touched: src/config.rs (ProviderConfig at :434 now
+      Default with an optional harness map; ProviderHarnessConfig at :443 holds only
+      env and harness_args; ConfigDirectory::for_provider at :388 derives both shapes
+      entry by entry; provider_template at :851 implements the D007 rule; validation
+      keeps env name, reservation, and model-overlap checks, reports a named harness
+      that is unknown or has no config_dir, and validate_provider_directories at :769
+      with native_directories at :742 reports a derived directory equal to any
+      harness's own directory in any supported context; the declared-directory,
+      variable-set, placeholder, and at-least-one-harness checks are gone),
+      src/launch.rs (BoundProvider at :1120 carries the derived directory and an
+      optional entry; bind_provider at :1159 refuses a harness without a config_dir;
+      exec derives for every harness with a config_dir at :740), src/lib.rs:669 (list
+      reports every harness with a config_dir as covered), README.md:266 (Providers
+      section rewritten for derivation, with a table of examples), and the provider
+      tests in src/config.rs, src/launch.rs, and tests/provider_axis.rs. New tests
+      cover the three derivation cases plus trailing slashes and a component after
+      {context}, both directory shapes, cross-harness and cross-context coincidences,
+      an empty provider launching Claude Code, and an empty provider table deriving
+      claude-bare and codex-bare directories through the binary. A stale build once
+      reported 356 passing tests against the old binary; the results here follow cargo
+      clean -p tftio-clanker. cargo nextest: 358 tests pass. mise run check passes
+      every hook. Line coverage 97.12%.
 ```
 <!-- TASK_GRAPH:END -->
 
@@ -1101,7 +1123,7 @@ cargo machete.
 
 ## T011 — Derive provider directories from the harness templates
 
-Status: `not_started`
+Status: `done`
 
 Depends on: none
 
@@ -1128,7 +1150,26 @@ harness_args.
 
 ### Completion Evidence
 
-Agents update this when the task is complete.
+Done 2026-11-18. Files touched: src/config.rs (ProviderConfig at :434 now Default with
+an optional harness map; ProviderHarnessConfig at :443 holds only env and harness_args;
+ConfigDirectory::for_provider at :388 derives both shapes entry by entry;
+provider_template at :851 implements the D007 rule; validation keeps env name,
+reservation, and model-overlap checks, reports a named harness that is unknown or has no
+config_dir, and validate_provider_directories at :769 with native_directories at :742
+reports a derived directory equal to any harness's own directory in any supported
+context; the declared-directory, variable-set, placeholder, and at-least-one-harness
+checks are gone), src/launch.rs (BoundProvider at :1120 carries the derived directory
+and an optional entry; bind_provider at :1159 refuses a harness without a config_dir;
+exec derives for every harness with a config_dir at :740), src/lib.rs:669 (list reports
+every harness with a config_dir as covered), README.md:266 (Providers section rewritten
+for derivation, with a table of examples), and the provider tests in src/config.rs,
+src/launch.rs, and tests/provider_axis.rs. New tests cover the three derivation cases
+plus trailing slashes and a component after {context}, both directory shapes, cross-
+harness and cross-context coincidences, an empty provider launching Claude Code, and an
+empty provider table deriving claude-bare and codex-bare directories through the binary.
+A stale build once reported 356 passing tests against the old binary; the results here
+follow cargo clean -p tftio-clanker. cargo nextest: 358 tests pass. mise run check
+passes every hook. Line coverage 97.12%.
 
 # Execution Protocol
 

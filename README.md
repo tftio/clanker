@@ -267,55 +267,75 @@ whole set without blocking variables from other harnesses.
 
 <!-- AGENT_GENERATED: true; AGENT_MODEL: claude-opus-5-5; AGENT_DATE: 2026-11-18 -->
 
-A provider runs a harness against a different inference endpoint, in any
-context, with its own config directories. For example, Claude Code can run
-against Z.ai's Anthropic-compatible endpoint in both the `personal` and `work`
-contexts while keeping its sessions, settings, and credentials apart from the
-native Claude Code directories for the same context.
+A provider runs harnesses against a different inference endpoint, in any
+context, with config directories of their own. For example, Claude Code and
+Codex can run against Z.ai in both the `personal` and `work` contexts while
+keeping their sessions, settings, and credentials apart from the directories
+they use without a provider.
 
-The base configuration defines no providers. Declare them in a local overlay,
-one table per harness the provider covers:
+The base configuration defines no providers. Declare them in a local overlay.
+An empty table is a complete provider:
 
 ```toml
-[provider.zai.harness.claude]
-env = { ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic", ANTHROPIC_DEFAULT_OPUS_MODEL = "glm-5.3", ANTHROPIC_DEFAULT_SONNET_MODEL = "glm-5.3", ANTHROPIC_DEFAULT_HAIKU_MODEL = "glm-5.3-flash" }
-harness_args = []
-
-[provider.zai.harness.claude.config_dir]
-environment = "CLAUDE_CONFIG_DIR"
-path = "~/.config/claude-zai/{context}"
+[provider.zai]
 ```
 
 Select it like any other axis: `clanker claude --provider zai`, a
 `provider = "zai"` line in a `.clanker`, or `CLANKER_PROVIDER=zai`. With no
 provider, a launch is unchanged.
 
-`config_dir` is required and uses either directory shape. It must declare
-exactly the variables the harness's own `config_dir` declares, follows the same
-`{context}` rule, and must not resolve to the harness's own directory for any
-context the harness supports; `clanker doctor` reports any of these as a
-configuration error. The directory must already exist, and a launch whose
-provider directory is missing fails without exporting anything, as a launch
-with a missing context directory does.
+A provider covers every harness that declares a `config_dir`, and derives each
+directory from the harness's own template by appending `-<provider>` to one
+path component:
 
-`env` and `harness_args` are optional literal values. Provider `env` is subject
-to the same name and reservation checks as model `env`, and a provider and a
-model for the same harness may not set the same variable. The launch order is:
-harness `default_args`, the injected prompt, provider `harness_args`, model
-`harness_args`, then passthrough. Environment is applied domain, then provider,
-then model.
+| Harness template | Derived for `zai` |
+|---|---|
+| `~/.config/claude/{context}` | `~/.config/claude-zai/{context}` |
+| `~/.config/codex/{context}` | `~/.config/codex-zai/{context}` |
+| `~/.c/x-{context}` (context inside a component) | `~/.c/x-{context}-zai` |
+| `~/.pi/agent` (fixed, single-context harness) | `~/.pi/agent-zai` |
 
-Selecting a provider that does not cover the launched harness is an error
-rather than a fall back to the harness's own endpoint. A launch that resolved a
-provider exports `CLANKER_PROVIDER`, so a `clanker` started inside the session
-resolves the same one. Symlink mode (`<harness>-launch`) resolves the provider
-from `.clanker` and `CLANKER_PROVIDER`.
+When `{context}` is a whole component, the component before it gains the
+suffix; when it sits inside a component, or directly under `~`, that component
+gains it; a fixed path suffixes its last component. Both directory shapes are
+derived entry by entry and keep their variables. A derived directory always
+differs from the harness's own, and `clanker doctor` reports one that
+coincides with any harness's directory in any other context. A derived
+directory must already exist: a launch fails without it, and `clanker exec`
+warns and omits that harness, exactly as for a missing context directory.
+Launching a provider for a harness with no `config_dir` is an error rather
+than a fall back to the harness's own endpoint.
 
-Credentials do not belong in provider `env` or `harness_args`, which are
-literal values in a file. For Claude Code, put an `apiKeyHelper` in the
-provider directory's own `settings.json`; Claude Code runs it when it needs a
-credential, and it outranks a claude.ai login. For example, with the key in a
-sops document:
+A provider may add literal `env` and `harness_args` for individual harnesses:
+
+```toml
+[provider.zai.harness.claude]
+env = { ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic", ANTHROPIC_DEFAULT_OPUS_MODEL = "glm-5.3", ANTHROPIC_DEFAULT_SONNET_MODEL = "glm-5.3", ANTHROPIC_DEFAULT_HAIKU_MODEL = "glm-5.3-flash" }
+harness_args = []
+```
+
+Naming a harness there that does not exist or declares no `config_dir` is a
+configuration error. Provider `env` is subject to the same name and reservation
+checks as model `env`, and a provider and a model for the same harness may not
+set the same variable. The launch order is: harness `default_args`, the
+injected prompt, provider `harness_args`, model `harness_args`, then
+passthrough. Environment is applied domain, then provider, then model.
+
+A launch that resolved a provider exports `CLANKER_PROVIDER`, so a `clanker`
+started inside the session resolves the same one. Symlink mode
+(`<harness>-launch`) resolves the provider from `.clanker` and
+`CLANKER_PROVIDER`. `clanker exec --provider <name>` exports every harness's
+derived directories, and `clanker list` reports which harnesses each provider
+covers.
+
+Endpoint settings that are not environment variables belong in the derived
+directory itself, which each harness reads as its ordinary configuration: a
+Codex `config.toml` under `CODEX_HOME`, or OpenCode's own provider
+configuration under `OPENCODE_CONFIG_DIR`. Credentials do not belong in
+provider `env` or `harness_args`, which are literal values in a file. For
+Claude Code, put an `apiKeyHelper` in the derived directory's `settings.json`;
+Claude Code runs it when it needs a credential, and it outranks a claude.ai
+login. For example, with the key in a sops document:
 
 ```json
 {
@@ -323,8 +343,8 @@ sops document:
 }
 ```
 
-Each provider directory is a separate Claude Code configuration, so plugins,
-hooks, and skills are installed into it separately, for example with
+Each derived directory is a separate harness configuration, so plugins, hooks,
+and skills are installed into it separately, for example with
 `clanker exec --provider zai -- claude plugin install <plugin>`.
 
 ## Playwright MCP profiles

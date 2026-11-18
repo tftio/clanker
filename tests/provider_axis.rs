@@ -13,9 +13,7 @@ const OVERLAY: &str = r#"
 env = { ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic" }
 harness_args = ["--settings", "provider-settings.json"]
 
-[provider.zai.harness.claude.config_dir]
-environment = "CLAUDE_CONFIG_DIR"
-path = "~/.config/claude-zai/{context}"
+[provider.bare]
 "#;
 
 struct Sandbox {
@@ -34,6 +32,10 @@ impl Sandbox {
             ".config/claude/personal",
             ".config/claude/work",
             ".config/claude-zai/personal",
+            ".config/codex/personal",
+            ".config/codex-zai/personal",
+            ".config/claude-bare/personal",
+            ".config/codex-bare/personal",
         ] {
             fs::create_dir_all(temp.path().join(directory))?;
         }
@@ -176,15 +178,69 @@ fn a_provider_without_a_directory_for_the_context_fails_closed() -> TestResult {
 }
 
 #[test]
-fn an_unknown_or_uncovered_provider_is_refused() -> TestResult {
+fn an_unknown_provider_is_refused() -> TestResult {
     let sandbox = Sandbox::new()?;
     let output = sandbox.run(&["claude", "--provider", "ghost", "--dry-run"])?;
     assert!(!output.status.success());
     assert!(stderr(&output).contains("unknown provider `ghost` from --provider"));
+    Ok(())
+}
 
-    let output = sandbox.run(&["codex", "--provider", "zai", "--dry-run"])?;
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("does not cover harness `codex`"));
+#[test]
+fn an_empty_provider_derives_a_directory_for_claude_and_codex() -> TestResult {
+    let sandbox = Sandbox::new()?;
+    for (harness, variable, relative) in [
+        (
+            "claude",
+            "CLAUDE_CONFIG_DIR",
+            ".config/claude-bare/personal",
+        ),
+        ("codex", "CODEX_HOME", ".config/codex-bare/personal"),
+    ] {
+        let output = sandbox.run(&[
+            "--json",
+            harness,
+            "--provider",
+            "bare",
+            "--no-prompt",
+            "--dry-run",
+        ])?;
+        assert!(output.status.success(), "{harness}: {}", stderr(&output));
+        let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let plan = plan.get("data").unwrap_or(&plan);
+        assert_eq!(
+            text(plan, &format!("/environment/{variable}/value"))?,
+            sandbox.path(relative).display().to_string(),
+            "{harness}"
+        );
+        assert_eq!(plan["provider"], "bare");
+        assert!(plan.pointer("/environment/ANTHROPIC_BASE_URL").is_none());
+    }
+    Ok(())
+}
+
+#[test]
+fn a_provider_with_claude_additions_still_covers_codex() -> TestResult {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox.run(&[
+        "--json",
+        "codex",
+        "--provider",
+        "zai",
+        "--no-prompt",
+        "--dry-run",
+    ])?;
+    assert!(output.status.success(), "{}", stderr(&output));
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let plan = plan.get("data").unwrap_or(&plan);
+    assert_eq!(
+        text(plan, "/environment/CODEX_HOME/value")?,
+        sandbox
+            .path(".config/codex-zai/personal")
+            .display()
+            .to_string()
+    );
+    assert!(plan.pointer("/environment/ANTHROPIC_BASE_URL").is_none());
     Ok(())
 }
 
@@ -203,6 +259,19 @@ fn exec_with_a_provider_exports_the_provider_directory() -> TestResult {
         stdout.lines().any(|line| line == "CLANKER_PROVIDER=zai"),
         "{stdout}"
     );
+    let codex = format!(
+        "CODEX_HOME={}",
+        sandbox.path(".config/codex-zai/personal").display()
+    );
+    assert!(stdout.lines().any(|line| line == codex), "{stdout}");
+    // OpenCode has no zai directory in the sandbox, so exec warns and omits it
+    // rather than exporting its native directory.
+    let warnings = stderr(&output);
+    assert!(
+        warnings.contains("skipping harness `opencode`"),
+        "{warnings}"
+    );
+    assert!(!stdout.contains("OPENCODE_CONFIG_DIR="), "{stdout}");
     Ok(())
 }
 
@@ -237,14 +306,22 @@ fn list_reports_each_provider_and_the_harnesses_it_covers() -> TestResult {
     let output = sandbox.run(&["list"])?;
     assert!(output.status.success(), "{}", stderr(&output));
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Providers:\n  zai (claude)\n"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "Providers:\n  bare (claude, codex, opencode, pi)\n  zai (claude, codex, opencode, pi)\n"
+        ),
+        "{stdout}"
+    );
 
     let output = sandbox.run(&["--json", "list"])?;
     assert!(output.status.success(), "{}", stderr(&output));
     let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(
         value.pointer("/data/providers"),
-        Some(&serde_json::json!([{ "name": "zai", "harnesses": ["claude"] }]))
+        Some(&serde_json::json!([
+            { "name": "bare", "harnesses": ["claude", "codex", "opencode", "pi"] },
+            { "name": "zai", "harnesses": ["claude", "codex", "opencode", "pi"] }
+        ]))
     );
     Ok(())
 }

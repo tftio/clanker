@@ -663,10 +663,17 @@ fn emit_list(loaded: &LoadedConfig, output: JsonOutput) -> Result<(), ClankerErr
         providers: loaded
             .config
             .provider
-            .iter()
-            .map(|(name, provider)| ProviderListing {
+            .keys()
+            .map(|name| ProviderListing {
                 name: name.to_string(),
-                harnesses: provider.harness.keys().map(ToString::to_string).collect(),
+                // A provider covers every harness with directories to derive.
+                harnesses: loaded
+                    .config
+                    .harness
+                    .iter()
+                    .filter(|(_, harness)| harness.config_dir.is_some())
+                    .map(|(harness, _)| harness.to_string())
+                    .collect(),
             })
             .collect(),
     };

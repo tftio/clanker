@@ -445,9 +445,10 @@ pub enum LaunchError {
         /// Winning precedence tier that supplied it.
         origin: &'static str,
     },
-    /// The selected provider does not cover the selected harness.
+    /// The selected harness declares no config directory for a provider to
+    /// derive from.
     #[error(
-        "provider `{provider}` from {origin} does not cover harness `{harness}`; add [provider.{provider}.harness.{harness}] or select another provider"
+        "provider `{provider}` from {origin} does not cover harness `{harness}`: the harness declares no config_dir, so the provider cannot give it separate directories"
     )]
     ProviderHarnessUnsupported {
         /// Selected provider.
@@ -532,7 +533,7 @@ pub fn build_symlink_plan(
         context,
         provider.as_ref(),
     )?;
-    if let Some(entry) = provider.as_ref().map(|bound| bound.config) {
+    if let Some(entry) = provider.as_ref().and_then(|bound| bound.config) {
         let mut arguments: Vec<OsString> = entry.harness_args.iter().map(OsString::from).collect();
         arguments.append(&mut plan.args);
         plan.args = arguments;
@@ -573,7 +574,7 @@ fn build_harness_plan_for_context(
     // A provider replaces the harness's own directories outright; validation
     // guarantees it declares the same variables and never the same paths.
     let config_directories = provider
-        .map(|bound| &bound.config.config_dir)
+        .map(|bound| &bound.directory)
         .or(harness_config.config_dir.as_ref())
         .map(|config_dir| resolve_config_directories(config_dir, invocation, &context, inputs.home))
         .transpose()?
@@ -720,10 +721,6 @@ pub fn build_exec_plan(
         inputs,
         config,
     )?;
-    let provider_harnesses = provider
-        .as_ref()
-        .and_then(|resolved| config.provider.get(&resolved.value))
-        .map(|provider| &provider.harness);
     let mut environment = exec_base_environment(config, inputs, &context, provider.as_ref())?;
 
     let mut owners: BTreeMap<String, (HarnessName, PathBuf)> = BTreeMap::new();
@@ -732,16 +729,18 @@ pub fn build_exec_plan(
         if !harness_config.supports_context(&context.value) {
             continue;
         }
-        // A harness the provider covers uses the provider's directories; every
-        // other harness keeps its own.
-        let provider_directory = provider_harnesses
-            .and_then(|harnesses| harnesses.get(harness))
-            .map(|entry| &entry.config_dir);
-        let Some(config_dir) = provider_directory.or(harness_config.config_dir.as_ref()) else {
+        // With a provider, every harness with directories uses the ones derived
+        // for that provider; a harness without directories contributes nothing
+        // either way.
+        let Some(native) = &harness_config.config_dir else {
             continue;
         };
+        let config_dir = provider.as_ref().map_or_else(
+            || native.clone(),
+            |resolved| native.for_provider(&resolved.value),
+        );
         let resolved = match resolve_config_directories(
-            config_dir,
+            &config_dir,
             &format!("clanker exec ({harness})"),
             &context,
             inputs.home,
@@ -940,7 +939,7 @@ pub fn build_command_plan(
             request,
             harness_config,
             domain_configs: &domain_configs,
-            applied_provider: provider.as_ref().map(|bound| bound.config),
+            applied_provider: provider.as_ref().and_then(|bound| bound.config),
             applied_model,
             family,
             config,
@@ -952,7 +951,7 @@ pub fn build_command_plan(
 
     apply_domain_environment(&mut plan, &domain_configs);
     apply_credential_allowlist(&mut plan, config, &domain_configs, inputs.inherited_names);
-    if let Some(entry) = provider.as_ref().map(|bound| bound.config) {
+    if let Some(entry) = provider.as_ref().and_then(|bound| bound.config) {
         apply_provider_environment(&mut plan, entry);
     }
     if let Some(model_config) = applied_model {
@@ -1115,11 +1114,13 @@ fn resolve_model(
     .map_err(Into::into)
 }
 
-/// A resolved provider together with its settings for the launched harness.
+/// A resolved provider bound to the launched harness: the directories derived
+/// from the harness's own, and the provider's optional per-harness additions.
 #[derive(Debug, Clone)]
 struct BoundProvider<'a> {
     name: axis::Resolved<ProviderName>,
-    config: &'a ProviderHarnessConfig,
+    directory: ConfigDirectory,
+    config: Option<&'a ProviderHarnessConfig>,
 }
 
 /// Resolve the provider axis and reject a name the configuration does not
@@ -1149,30 +1150,37 @@ fn resolve_provider(
     }
 }
 
-/// Look up a resolved provider's settings for one harness.
+/// Bind a resolved provider to one harness.
 ///
-/// A provider that does not cover the harness is an error rather than a
-/// silent fall back to the native endpoint: the operator asked for the
-/// provider, and launching the native endpoint instead would put the session
-/// in the native directories.
+/// A provider covers every harness that declares a `config_dir`. A harness
+/// without one is an error rather than a silent fall back to the native
+/// endpoint: there is no directory to separate, so the provider session would
+/// share whatever state the harness keeps by default.
 fn bind_provider<'a>(
     resolved: axis::Resolved<ProviderName>,
     harness: &HarnessName,
     config: &'a Config,
 ) -> Result<BoundProvider<'a>, LaunchError> {
-    config
-        .provider
-        .get(&resolved.value)
-        .and_then(|provider| provider.harness.get(harness))
-        .ok_or_else(|| LaunchError::ProviderHarnessUnsupported {
-            provider: resolved.value.clone(),
+    let Some(native) = config
+        .harness
+        .get(harness)
+        .and_then(|harness_config| harness_config.config_dir.as_ref())
+    else {
+        return Err(LaunchError::ProviderHarnessUnsupported {
+            provider: resolved.value,
             origin: resolved.source.label(axis::PROVIDER),
             harness: harness.clone(),
-        })
-        .map(|entry| BoundProvider {
-            name: resolved,
-            config: entry,
-        })
+        });
+    };
+    let entry = config
+        .provider
+        .get(&resolved.value)
+        .and_then(|provider| provider.harness.get(harness));
+    Ok(BoundProvider {
+        directory: native.for_provider(&resolved.value),
+        name: resolved,
+        config: entry,
+    })
 }
 
 fn apply_provider_environment(plan: &mut LaunchPlan, entry: &ProviderHarnessConfig) {
@@ -2223,8 +2231,8 @@ env = {}
 
     // ---- provider axis ----
 
-    /// `CONFIG` with a Claude config directory and a `zai` provider covering
-    /// Claude only.
+    /// `CONFIG` with a Claude config directory (Codex has none) and a `zai`
+    /// provider that adds env and arguments for Claude.
     fn provider_config() -> Config {
         let mut config = config();
         config.harness.get_mut("claude").unwrap().config_dir =
@@ -2237,9 +2245,6 @@ env = {}
 [harness.claude]
 env = { ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic" }
 harness_args = ["--provider-arg"]
-[harness.claude.config_dir]
-environment = "CLAUDE_CONFIG_DIR"
-path = "~/.claude-zai/{context}"
 "#,
         )
         .unwrap();
@@ -2410,6 +2415,7 @@ path = "~/.claude-zai/{context}"
             LaunchError::ProviderHarnessUnsupported { .. }
         ));
         assert!(error.to_string().contains("does not cover harness `codex`"));
+        assert!(error.to_string().contains("declares no config_dir"));
     }
 
     #[test]
@@ -2488,51 +2494,23 @@ path = "~/.claude-zai/{context}"
         assert_eq!(plan.provider_source, Some(AxisSource::Environment));
     }
 
-    /// `EXEC_CONFIG` with a provider covering `alpha` only.
+    /// `EXEC_CONFIG` with an empty `zai` provider, which covers every harness
+    /// that declares directories.
     fn exec_provider_config() -> Config {
         let mut config = exec_config();
-        let provider: crate::config::ProviderConfig = toml::from_str(
-            "[harness.alpha.config_dir]\nenvironment = \"ALPHA_HOME\"\npath = \"~/.alpha-zai/{context}\"\n",
-        )
-        .unwrap();
-        config.provider.insert(zai(), provider);
+        config
+            .provider
+            .insert(zai(), crate::config::ProviderConfig::default());
         assert!(config.issues().is_empty(), "{:?}", config.issues());
         config
     }
 
     #[test]
-    fn exec_with_a_provider_replaces_only_the_covered_harness_directories() {
+    fn exec_with_a_provider_derives_every_harness_directory() {
         let home = exec_home();
-        fs::create_dir_all(home.path().join(".alpha-zai/personal")).unwrap();
-        let mut request = exec_request();
-        request.provider = Some(zai());
-
-        let (plan, skipped) = build_exec_plan(
-            &request,
-            &exec_provider_config(),
-            inputs(home.path(), home.path()),
-        )
-        .unwrap();
-
-        assert!(skipped.is_empty());
-        assert_eq!(
-            exec_value(&plan, "ALPHA_HOME").map(|entry| entry.value.clone()),
-            Some(home.path().join(".alpha-zai/personal").into_os_string())
-        );
-        assert_eq!(
-            exec_value(&plan, "BETA_HOME").map(|entry| entry.value.clone()),
-            Some(home.path().join(".beta/personal").into_os_string())
-        );
-        assert_eq!(
-            exec_value(&plan, "CLANKER_PROVIDER").map(|entry| entry.value.clone()),
-            Some(OsString::from("zai"))
-        );
-        assert_eq!(plan.provider.map(|resolved| resolved.value), Some(zai()));
-    }
-
-    #[test]
-    fn exec_skips_a_harness_whose_provider_directory_is_missing() {
-        let home = exec_home();
+        for directory in [".alpha-zai/personal", ".beta-zai/personal"] {
+            fs::create_dir_all(home.path().join(directory)).unwrap();
+        }
         let mut request = exec_request();
         request.provider = Some(zai());
 
@@ -2546,23 +2524,37 @@ path = "~/.claude-zai/{context}"
         assert_eq!(
             skipped,
             [SkippedConfigDirectory {
-                harness: HarnessName::new("alpha").unwrap(),
-                path: home.path().join(".alpha-zai/personal"),
+                harness: HarnessName::new("gamma").unwrap(),
+                path: home.path().join(".gamma-zai/personal"),
             }]
         );
-        assert!(exec_value(&plan, "ALPHA_HOME").is_none());
-        assert!(exec_value(&plan, "BETA_HOME").is_some());
+        for (variable, relative) in [
+            ("ALPHA_HOME", ".alpha-zai/personal"),
+            ("BETA_HOME", ".beta-zai/personal"),
+        ] {
+            assert_eq!(
+                exec_value(&plan, variable).map(|entry| entry.value.clone()),
+                Some(home.path().join(relative).into_os_string())
+            );
+        }
+        assert!(exec_value(&plan, "GAMMA_HOME").is_none());
+        assert_eq!(
+            exec_value(&plan, "CLANKER_PROVIDER").map(|entry| entry.value.clone()),
+            Some(OsString::from("zai"))
+        );
+        assert_eq!(plan.provider.map(|resolved| resolved.value), Some(zai()));
     }
 
     #[test]
     fn exec_without_a_provider_is_unchanged_and_rejects_an_unknown_one() {
         let home = exec_home();
-        let (plan, _) = build_exec_plan(
+        let (plan, skipped) = build_exec_plan(
             &exec_request(),
             &exec_provider_config(),
             inputs(home.path(), home.path()),
         )
         .unwrap();
+        assert!(skipped.is_empty());
         assert!(exec_value(&plan, "CLANKER_PROVIDER").is_none());
         assert_eq!(
             exec_value(&plan, "ALPHA_HOME").map(|entry| entry.value.clone()),
@@ -2578,5 +2570,32 @@ path = "~/.claude-zai/{context}"
         )
         .unwrap_err();
         assert!(matches!(error, LaunchError::UnknownProvider { .. }));
+    }
+
+    #[test]
+    fn an_empty_provider_launches_with_derived_directories_and_no_additions() {
+        let home = provider_home();
+        let mut config = provider_config();
+        config
+            .provider
+            .insert(zai(), crate::config::ProviderConfig::default());
+        let mut request = request("claude");
+        request.provider = Some(zai());
+
+        let plan = build_command_plan(
+            "clanker claude",
+            &request,
+            &config,
+            inputs(home.path(), home.path()),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            value(&plan, "CLAUDE_CONFIG_DIR").map(|entry| entry.value.clone()),
+            Some(home.path().join(".claude-zai/personal").into_os_string())
+        );
+        assert!(value(&plan, "ANTHROPIC_BASE_URL").is_none());
+        assert_eq!(plan.args, [OsString::from("--flag")]);
     }
 }
