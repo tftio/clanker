@@ -76,7 +76,6 @@ use profile::expand_tilde;
 
 use serde::Serialize;
 
-use chrono::Local;
 use clap::Parser;
 use colored::Colorize;
 use is_terminal::IsTerminal;
@@ -256,8 +255,13 @@ fn default_post_prompt() -> String {
     "Now, read the @AGENTS.md and @CLAUDE.md files in this directory, if they exist.".to_string()
 }
 
+/// Today's date in the local time zone, formatted `YYYY-MM-DD`.
+pub(crate) fn local_date() -> String {
+    jiff::Zoned::now().date().to_string()
+}
+
 fn format_system_prefix() -> String {
-    let date = Local::now().format("%Y-%m-%d").to_string();
+    let date = local_date();
     let os = env::consts::OS;
     let arch = env::consts::ARCH;
 
@@ -397,6 +401,22 @@ mod tests {
     #[allow(unused_imports)]
     use std::collections::HashSet;
     use std::io::Write;
+
+    #[test]
+    fn local_date_is_an_iso_calendar_date() {
+        let date = local_date();
+        let parts: Vec<&str> = date.split('-').collect();
+        assert_eq!(parts.len(), 3, "{date}");
+        assert!(
+            parts
+                .iter()
+                .zip([4, 2, 2])
+                .all(|(part, width)| part.len() == width
+                    && part.bytes().all(|byte| byte.is_ascii_digit())),
+            "{date}"
+        );
+        assert!(jiff::civil::Date::strptime("%Y-%m-%d", &date).is_ok());
+    }
 
     fn mk_tmp(prefix: &str) -> PathBuf {
         let mut p = env::temp_dir();

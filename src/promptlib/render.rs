@@ -6,7 +6,6 @@ use super::{
     FragmentOutput, Framing, PrompterError, RenderOutput, default_post_prompt, default_pre_prompt,
     format_system_prefix,
 };
-use chrono::Local;
 use std::collections::HashSet;
 use std::env;
 use std::fs;
@@ -141,7 +140,7 @@ fn write_json_render(
     };
 
     let system_info = if framing.is_full() {
-        let date = Local::now().format("%Y-%m-%d").to_string();
+        let date = crate::promptlib::local_date();
         let os = env::consts::OS;
         let arch = env::consts::ARCH;
         format!("Today is {date}, and you are running on a {arch}/{os} system.")
@@ -631,7 +630,7 @@ mod tests {
     fn expected_json_fixture(framing: Framing) -> serde_json::Value {
         let (pre_prompt, system_info) = match framing {
             Framing::Full => {
-                let date = Local::now().format("%Y-%m-%d").to_string();
+                let date = crate::promptlib::local_date();
                 (
                     default_pre_prompt(),
                     format!(

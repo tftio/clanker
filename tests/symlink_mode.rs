@@ -46,6 +46,9 @@ printf 'CLANKER_SESSION_DOMAINS=%s\n' "${CLANKER_SESSION_DOMAINS:-}"
 printf 'CLANKER_SESSION_DOMAIN_SOURCE=%s\n' "${CLANKER_SESSION_DOMAIN_SOURCE:-}"
 printf 'CLANKER_SESSION_MODEL=%s\n' "${CLANKER_SESSION_MODEL:-}"
 printf 'CLANKER_SESSION_MODEL_SOURCE=%s\n' "${CLANKER_SESSION_MODEL_SOURCE:-}"
+printf 'CLANKER_SESSION_PROVIDER=%s\n' "${CLANKER_SESSION_PROVIDER:-}"
+printf 'CLANKER_SESSION_PROVIDER_SOURCE=%s\n' "${CLANKER_SESSION_PROVIDER_SOURCE:-}"
+printf 'CLANKER_PROVIDER=%s\n' "${CLANKER_PROVIDER:-}"
 printf 'CLANKER_SESSION_FAMILY=%s\n' "${CLANKER_SESSION_FAMILY:-}"
 printf 'CLANKER_SESSION_PROJECT=%s\n' "${CLANKER_SESSION_PROJECT:-}"
 printf 'CLANKER_SESSION_PROJECT_SOURCE=%s\n' "${CLANKER_SESSION_PROJECT_SOURCE:-}"
@@ -779,7 +782,7 @@ fn current_reports_inherited_launch_markers_without_recomputing() -> TestResult 
     let output = sandbox
         .bare_command()?
         .env("CLANKER_SESSION", "1")
-        .env("CLANKER_SESSION_VERSION", "5")
+        .env("CLANKER_SESSION_VERSION", "6")
         .env("CLANKER_SESSION_ID", TEST_SESSION_ID)
         .env("CLANKER_SESSION_INVOCATION", "clanker claude")
         .env("CLANKER_SESSION_HARNESS", "claude")
@@ -851,12 +854,13 @@ fn launch_modes_export_complete_current_session_markers() -> TestResult {
         .env("CLANKER_CONTEXT", "work")
         .env("CLANKER_SESSION_DOMAINS", "stale-domain")
         .env("CLANKER_SESSION_MODEL", "stale-model")
+        .env("CLANKER_SESSION_PROVIDER", "stale-provider")
         .output()?;
     assert!(symlink.status.success(), "stderr: {}", stderr(&symlink));
     let symlink = stdout(&symlink);
     for expected in [
         "CLANKER_SESSION=1\n",
-        "CLANKER_SESSION_VERSION=5\n",
+        "CLANKER_SESSION_VERSION=6\n",
         "CLANKER_SESSION_INVOCATION=claude-launch\n",
         "CLANKER_SESSION_HARNESS=claude\n",
         "CLANKER_SESSION_CONTEXT=work\n",
@@ -865,6 +869,9 @@ fn launch_modes_export_complete_current_session_markers() -> TestResult {
         "CLANKER_SESSION_DOMAIN_SOURCE=\n",
         "CLANKER_SESSION_MODEL=\n",
         "CLANKER_SESSION_MODEL_SOURCE=\n",
+        "CLANKER_SESSION_PROVIDER=\n",
+        "CLANKER_SESSION_PROVIDER_SOURCE=\n",
+        "CLANKER_PROVIDER=\n",
         "CLANKER_SESSION_FAMILY=\n",
         "CLANKER_SESSION_PROJECT=\n",
         "CLANKER_SESSION_PROJECT_SOURCE=\n",
@@ -893,7 +900,7 @@ fn launch_modes_export_complete_current_session_markers() -> TestResult {
     let command = stdout(&command);
     for expected in [
         "CLANKER_SESSION=1\n",
-        "CLANKER_SESSION_VERSION=5\n",
+        "CLANKER_SESSION_VERSION=6\n",
         "CLANKER_SESSION_INVOCATION=clanker claude\n",
         "CLANKER_SESSION_HARNESS=claude\n",
         "CLANKER_SESSION_CONTEXT=work\n",
@@ -901,6 +908,8 @@ fn launch_modes_export_complete_current_session_markers() -> TestResult {
         "CLANKER_SESSION_DOMAINS=eng\n",
         "CLANKER_SESSION_DOMAIN_SOURCE=.clanker\n",
         "CLANKER_SESSION_MODEL=\n",
+        "CLANKER_SESSION_PROVIDER=\n",
+        "CLANKER_SESSION_PROVIDER_SOURCE=\n",
         "CLANKER_SESSION_FAMILY=claude\n",
         "CLANKER_SESSION_PROJECT=\n",
         "CLANKER_SESSION_PROJECT_SOURCE=\n",
@@ -1845,7 +1854,7 @@ fn current_text_reports_full_inherited_markers() -> TestResult {
     let output = sandbox
         .bare_command()?
         .env("CLANKER_SESSION", "1")
-        .env("CLANKER_SESSION_VERSION", "5")
+        .env("CLANKER_SESSION_VERSION", "6")
         .env("CLANKER_SESSION_ID", TEST_SESSION_ID)
         .env("CLANKER_SESSION_INVOCATION", "clanker claude")
         .env("CLANKER_SESSION_HARNESS", "claude")
@@ -1855,6 +1864,8 @@ fn current_text_reports_full_inherited_markers() -> TestResult {
         .env("CLANKER_SESSION_DOMAIN_SOURCE", ".clanker")
         .env("CLANKER_SESSION_MODEL", "claude-alt")
         .env("CLANKER_SESSION_MODEL_SOURCE", "--model")
+        .env("CLANKER_SESSION_PROVIDER", "zai")
+        .env("CLANKER_SESSION_PROVIDER_SOURCE", ".clanker")
         .env("CLANKER_SESSION_FAMILY", "gpt")
         .env("CLANKER_SESSION_PROJECT", "kb")
         .env("CLANKER_SESSION_PROJECT_SOURCE", "declared")
@@ -1865,7 +1876,7 @@ fn current_text_reports_full_inherited_markers() -> TestResult {
     let text = stdout(&output);
     for expected in [
         "active=true\n",
-        "version=5\n",
+        "version=6\n",
         "invocation=clanker claude\n",
         "harness=claude\n",
         "context=work\n",
@@ -1875,6 +1886,8 @@ fn current_text_reports_full_inherited_markers() -> TestResult {
         "domain_source=.clanker\n",
         "model=claude-alt\n",
         "model_source=--model\n",
+        "provider=zai\n",
+        "provider_source=.clanker\n",
         "family=gpt\n",
         "project=kb\n",
         "project_source=declared\n",

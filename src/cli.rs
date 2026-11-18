@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tftio_lib::MetaCommand;
 
-use crate::config::{ContextName, DomainName, HarnessName, InvalidName, ModelName};
+use crate::config::{ContextName, DomainName, HarnessName, InvalidName, ModelName, ProviderName};
 use crate::promptlib::FamilyName;
 
 /// Top-level clanker command-mode arguments.
@@ -58,6 +58,9 @@ pub enum Command {
         /// Highest-precedence context override.
         #[arg(long, value_name = "CONTEXT")]
         context: Option<OsString>,
+        /// Highest-precedence provider override.
+        #[arg(long, value_name = "PROVIDER")]
+        provider: Option<OsString>,
         /// Verbatim command argv beginning after `--`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         argv: Vec<OsString>,
@@ -179,6 +182,8 @@ pub struct LaunchRequest {
     pub domains: Vec<DomainName>,
     /// Highest-precedence model override.
     pub model: Option<ModelName>,
+    /// Highest-precedence provider override.
+    pub provider: Option<ProviderName>,
     /// Additional prompter profiles, in request order.
     pub profiles: Vec<String>,
     /// Wrap the final executable with the configured sandbox command.
@@ -198,6 +203,8 @@ pub struct LaunchRequest {
 pub struct ExecRequest {
     /// Highest-precedence context override.
     pub context: Option<ContextName>,
+    /// Highest-precedence provider override.
+    pub provider: Option<ProviderName>,
     /// Executable name or path from the first argv value.
     pub executable: OsString,
     /// Verbatim argv values after the executable.
@@ -231,9 +238,10 @@ pub enum LaunchArgumentError {
 ///
 /// # Errors
 /// Returns [`LaunchArgumentError`] when the command argv is empty or the
-/// context override is invalid.
+/// context or provider override is invalid.
 pub fn parse_exec(
     context: Option<OsString>,
+    provider: Option<OsString>,
     argv: Vec<OsString>,
 ) -> Result<ExecRequest, LaunchArgumentError> {
     let mut argv = argv.into_iter();
@@ -241,8 +249,12 @@ pub fn parse_exec(
     let context = context
         .map(|value| parse_name(value, "--context", ContextName::new))
         .transpose()?;
+    let provider = provider
+        .map(|value| parse_name(value, "--provider", ProviderName::new))
+        .transpose()?;
     Ok(ExecRequest {
         context,
+        provider,
         executable,
         args: argv.collect(),
     })
@@ -276,6 +288,7 @@ pub fn parse_launch(
         context: None,
         domains: Vec::new(),
         model: None,
+        provider: None,
         profiles: Vec::new(),
         sandbox: false,
         no_prompt: false,
@@ -313,6 +326,13 @@ pub fn parse_launch(
             "--model" => {
                 request.model = Some(parse_next_name(&mut arguments, "--model", ModelName::new)?);
             }
+            "--provider" => {
+                request.provider = Some(parse_next_name(
+                    &mut arguments,
+                    "--provider",
+                    ProviderName::new,
+                )?);
+            }
             "--profile" => {
                 request
                     .profiles
@@ -329,6 +349,8 @@ pub fn parse_launch(
                     request.domains.push(DomainName::new(value)?);
                 } else if let Some(value) = text.strip_prefix("--model=") {
                     request.model = Some(ModelName::new(value)?);
+                } else if let Some(value) = text.strip_prefix("--provider=") {
+                    request.provider = Some(ProviderName::new(value)?);
                 } else if let Some(value) = text.strip_prefix("--profile=") {
                     request.profiles.push(parse_profile(value.to_string())?);
                 } else {
@@ -391,7 +413,7 @@ mod tests {
 
     #[test]
     fn exec_rejects_an_empty_argv_with_boundary_context() {
-        let error = parse_exec(None, Vec::new()).unwrap_err();
+        let error = parse_exec(None, None, Vec::new()).unwrap_err();
         assert!(matches!(error, LaunchArgumentError::MissingExecArgv));
         assert!(error.to_string().contains("after `--`"));
     }
@@ -399,10 +421,15 @@ mod tests {
     #[test]
     fn exec_captures_a_bare_argv_verbatim() {
         let cli = Cli::try_parse_from(["clanker", "exec", "--", "printf", "%s", "value"]).unwrap();
-        let Command::Exec { context, argv } = cli.command else {
+        let Command::Exec {
+            context,
+            provider,
+            argv,
+        } = cli.command
+        else {
             panic!("expected exec command");
         };
-        let request = parse_exec(context, argv).unwrap();
+        let request = parse_exec(context, provider, argv).unwrap();
         assert_eq!(request.executable, OsString::from("printf"));
         assert_eq!(request.args, values(&["%s", "value"]));
     }
@@ -410,10 +437,15 @@ mod tests {
     #[test]
     fn exec_captures_a_hyphen_leading_executable() {
         let cli = Cli::try_parse_from(["clanker", "exec", "--", "--version"]).unwrap();
-        let Command::Exec { context, argv } = cli.command else {
+        let Command::Exec {
+            context,
+            provider,
+            argv,
+        } = cli.command
+        else {
             panic!("expected exec command");
         };
-        let request = parse_exec(context, argv).unwrap();
+        let request = parse_exec(context, provider, argv).unwrap();
         assert_eq!(request.executable, OsString::from("--version"));
         assert!(request.args.is_empty());
     }
@@ -423,10 +455,15 @@ mod tests {
         let cli =
             Cli::try_parse_from(["clanker", "exec", "--context", "work", "--", "/usr/bin/env"])
                 .unwrap();
-        let Command::Exec { context, argv } = cli.command else {
+        let Command::Exec {
+            context,
+            provider,
+            argv,
+        } = cli.command
+        else {
             panic!("expected exec command");
         };
-        let request = parse_exec(context, argv).unwrap();
+        let request = parse_exec(context, provider, argv).unwrap();
         assert_eq!(
             request.context.map(|value| value.to_string()).as_deref(),
             Some("work")
@@ -535,6 +572,50 @@ mod tests {
 
         assert_eq!(request.context.unwrap().as_str(), "personal");
         assert_eq!(request.profiles, ["python.full"]);
+    }
+
+    #[test]
+    fn provider_flag_and_equals_forms_are_recognized() {
+        let request =
+            parse_external_launch(values(&["claude", "--provider", "zai", "--", "--provider"]))
+                .unwrap();
+        assert_eq!(request.provider.unwrap().as_str(), "zai");
+        assert_eq!(request.passthrough, values(&["--provider"]));
+
+        let request = parse_external_launch(values(&[
+            "claude",
+            "--provider",
+            "zai",
+            "--provider=deepseek",
+        ]))
+        .unwrap();
+        assert_eq!(request.provider.unwrap().as_str(), "deepseek");
+
+        let error = parse_external_launch(values(&["claude", "--provider"])).unwrap_err();
+        assert_eq!(error.to_string(), "--provider requires a value");
+
+        let error = parse_external_launch(values(&["claude", "--provider=../x"])).unwrap_err();
+        assert!(matches!(error, LaunchArgumentError::InvalidName(_)));
+    }
+
+    #[test]
+    fn exec_parses_a_provider_override_before_the_argv_boundary() {
+        let cli =
+            Cli::try_parse_from(["clanker", "exec", "--provider", "zai", "--", "env"]).unwrap();
+        let Command::Exec {
+            context,
+            provider,
+            argv,
+        } = cli.command
+        else {
+            panic!("expected exec command");
+        };
+        let request = parse_exec(context, provider, argv).unwrap();
+        assert_eq!(request.provider.unwrap().as_str(), "zai");
+        assert!(request.context.is_none());
+
+        let error = parse_exec(None, Some(OsString::from("../x")), values(&["env"])).unwrap_err();
+        assert!(matches!(error, LaunchArgumentError::InvalidName(_)));
     }
 
     #[test]
