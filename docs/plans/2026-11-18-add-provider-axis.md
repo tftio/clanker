@@ -2,7 +2,7 @@
 plan_format_version: 2
 plan_id: PLAN-20261118-add-provider-axis
 title: Add a provider selection axis so one harness can run against several endpoints with separate state
-status: approved
+status: implemented
 created_at: 2026-11-18
 updated_at: 2026-11-18
 owner: jfb
@@ -27,7 +27,7 @@ bug:
 execution:
   requires_operator_approval_before_implementation: true
   requires_plan_updates_during_execution: true
-  task_graph_status: executing
+  task_graph_status: complete
 project:
   slug: clanker
   remote: null
@@ -317,6 +317,20 @@ time are both acceptable. Commit the work so far on the feature branch (done:
 
 Impact on plan: D007 supersedes D002. New tasks T010 (replace chrono) and T011
 (derive provider directories); T007 now depends on both and returns to `not_started`.
+
+### 2026-11-18 — follow-up for the operator: DeepSeek plugins and other harnesses
+
+Question or decision needed: none blocking; recorded so it is not lost.
+
+Decision or guidance received: n/a.
+
+Impact on plan: the DeepSeek Claude Code directory has no plugins installed. Starting
+one session there (for example `deepseek -p hi`) should register the marketplaces from
+its settings.json, after which `clanker exec --provider deepseek -- claude plugin
+install <plugin>` should work as it did for zai; this was not tried, under the
+two-attempt rule. Codex and OpenCode provider directories (for example
+`~/.config/codex-zai/personal`) do not exist yet; each needs its own endpoint
+configuration before a provider launch of that harness will start.
 
 ## Decision Log
 
@@ -645,7 +659,7 @@ tasks:
       committed.
   - id: T008
     title: Regenerate agent-content eval goldens against the new binary
-    status: not_started
+    status: done
     depends_on:
       - T007
     owner: null
@@ -660,10 +674,26 @@ tasks:
       - Every golden diff is limited to CLANKER_SESSION_VERSION, the two provider markers, and the provider and provider_source fields.
     acceptance_checks:
       - agent-content's eval task passes against the regenerated goldens.
-    completion_evidence: null
+    completion_evidence: >
+      Done 2026-11-18 in agent-content on branch chore/clanker-provider-goldens
+      (worktree .worktrees/clanker-provider-goldens from origin/main at cd143bd),
+      using CLANKER_BIN pointed at the release build of this branch rather than an
+      installed binary. Discovery: on Linux, all 23 launch-plan goldens already failed
+      with the installed clanker, because they were recorded on macOS and macOS adds
+      __CF_USER_TEXT_ENCODING to every process, which appears in removed_environment.
+      Commit bbddc7f makes evals/run-evals drop OS-injected names
+      (PLATFORM_INJECTED_ENVIRONMENT, drop_platform_environment) and regenerates the
+      goldens with the old clanker; that diff removes only the __CF_USER_TEXT_ENCODING
+      entry from 23 plans. Commit 561f74e regenerates them with the new clanker;
+      across the 23 plans the diff is exactly CLANKER_SESSION_VERSION 5 to 6, the two
+      empty CLANKER_SESSION_PROVIDER and CLANKER_SESSION_PROVIDER_SOURCE entries, and
+      provider and provider_source as null. evals/run-evals --check: 48 checked, 0
+      failed against the new binary. agent-content's mise run check passed every hook
+      before 561f74e; its composition-evals hook uses the clanker on PATH, so it
+      passes after 561f74e only once the new clanker is installed (T009).
   - id: T009
     title: Configure Z.ai and DeepSeek providers and the fish aliases
-    status: not_started
+    status: done
     depends_on:
       - T007
     owner: null
@@ -685,7 +715,37 @@ tasks:
       - clanker doctor reports healthy.
       - Dry runs show CLAUDE_CONFIG_DIR under ~/.config/claude-zai/<context> for `glm` and under ~/.config/claude/<context> for `claude`.
       - A live `glm -p 'say hi'` returns a reply and its session appears only under ~/.config/claude-zai/<context>.
-    completion_evidence: null
+    completion_evidence: >
+      Done 2026-11-18, with one follow-up. Installed this branch with cargo install
+      --locked --path . (clanker 0.11.3 from the worktree; clanker doctor healthy).
+      ~/.config/clanker/local.toml gains [provider.zai.harness.claude] and
+      [provider.deepseek.harness.claude] with literal env only (endpoint, model
+      mapping, timeout, nonessential traffic and telemetry off;
+      ENABLE_TOOL_SEARCH=false for zai); clanker list reports both covering claude,
+      codex, opencode, and pi. Created ~/.config/claude-zai/personal and
+      ~/.config/claude-deepseek/personal (personal is the only enabled context on this
+      machine) with a mode-600 settings.json built from the personal one: an
+      apiKeyHelper that runs sops -d --extract on env.ZAI_API_KEY or
+      env.DEEPSEEK_API_KEY, the same hooks with the kb SessionEnd path changed from
+      /Users/jfb to ~/.config/claude/hooks, the same permissions and display settings,
+      and the tftio marketplace path pointed at the personal directory's tftio-
+      marketplace-src on this machine; the remote-control and push-notification keys
+      were left out. ~/.config/fish/conf.d/ai-tools.fish: glm runs clanker claude
+      --provider zai and deepseek runs clanker claude --provider deepseek. No
+      credential value is in any clanker config, fish file, or argv, and
+      ~/.config/claude/personal was not modified. Checks: clanker doctor healthy; dry
+      runs show CLAUDE_CONFIG_DIR at ~/.config/claude/personal without a provider,
+      ~/.config/claude-zai/personal with zai, and ~/.config/claude-deepseek/personal
+      with deepseek; a live clanker claude --provider zai -p call returned "hello glm"
+      from model glm-5.3[1m], and its session file exists only under ~/.config/claude-
+      zai/personal/projects. Plugins: all four personal plugins installed and enabled
+      in the zai directory through clanker exec --provider zai -- claude plugin
+      install. In the deepseek directory both install and marketplace update failed
+      because the copied extraKnownMarketplaces are not registered until a session
+      starts there; this was stopped after two attempts and is left for the operator
+      (see Operator Guidance Log). DeepSeek was not called live; its acceptance check
+      in this task covers glm only. Codex and OpenCode provider directories were not
+      created, so their provider launches fail closed until they are.
   - id: T010
     title: Replace chrono with jiff for the local date
     status: done
@@ -1052,7 +1112,7 @@ reverted and not committed.
 
 ## T008 — Regenerate agent-content eval goldens against the new binary
 
-Status: `not_started`
+Status: `done`
 
 Depends on: T007
 
@@ -1073,11 +1133,25 @@ differences are the version and the empty provider fields.
 
 ### Completion Evidence
 
-Agents update this when the task is complete.
+Done 2026-11-18 in agent-content on branch chore/clanker-provider-goldens (worktree
+.worktrees/clanker-provider-goldens from origin/main at cd143bd), using CLANKER_BIN
+pointed at the release build of this branch rather than an installed binary. Discovery:
+on Linux, all 23 launch-plan goldens already failed with the installed clanker, because
+they were recorded on macOS and macOS adds __CF_USER_TEXT_ENCODING to every process,
+which appears in removed_environment. Commit bbddc7f makes evals/run-evals drop OS-
+injected names (PLATFORM_INJECTED_ENVIRONMENT, drop_platform_environment) and
+regenerates the goldens with the old clanker; that diff removes only the
+__CF_USER_TEXT_ENCODING entry from 23 plans. Commit 561f74e regenerates them with the
+new clanker; across the 23 plans the diff is exactly CLANKER_SESSION_VERSION 5 to 6, the
+two empty CLANKER_SESSION_PROVIDER and CLANKER_SESSION_PROVIDER_SOURCE entries, and
+provider and provider_source as null. evals/run-evals --check: 48 checked, 0 failed
+against the new binary. agent-content's mise run check passed every hook before 561f74e;
+its composition-evals hook uses the clanker on PATH, so it passes after 561f74e only
+once the new clanker is installed (T009).
 
 ## T009 — Configure Z.ai and DeepSeek providers and the fish aliases
 
-Status: `not_started`
+Status: `done`
 
 Depends on: T007
 
@@ -1102,7 +1176,34 @@ their credential helpers, and point the aliases at the provider axis.
 
 ### Completion Evidence
 
-Agents update this when the task is complete.
+Done 2026-11-18, with one follow-up. Installed this branch with cargo install --locked
+--path . (clanker 0.11.3 from the worktree; clanker doctor healthy).
+~/.config/clanker/local.toml gains [provider.zai.harness.claude] and
+[provider.deepseek.harness.claude] with literal env only (endpoint, model mapping,
+timeout, nonessential traffic and telemetry off; ENABLE_TOOL_SEARCH=false for zai);
+clanker list reports both covering claude, codex, opencode, and pi. Created
+~/.config/claude-zai/personal and ~/.config/claude-deepseek/personal (personal is the
+only enabled context on this machine) with a mode-600 settings.json built from the
+personal one: an apiKeyHelper that runs sops -d --extract on env.ZAI_API_KEY or
+env.DEEPSEEK_API_KEY, the same hooks with the kb SessionEnd path changed from /Users/jfb
+to ~/.config/claude/hooks, the same permissions and display settings, and the tftio
+marketplace path pointed at the personal directory's tftio-marketplace-src on this
+machine; the remote-control and push-notification keys were left out.
+~/.config/fish/conf.d/ai-tools.fish: glm runs clanker claude --provider zai and deepseek
+runs clanker claude --provider deepseek. No credential value is in any clanker config,
+fish file, or argv, and ~/.config/claude/personal was not modified. Checks: clanker
+doctor healthy; dry runs show CLAUDE_CONFIG_DIR at ~/.config/claude/personal without a
+provider, ~/.config/claude-zai/personal with zai, and ~/.config/claude-deepseek/personal
+with deepseek; a live clanker claude --provider zai -p call returned "hello glm" from
+model glm-5.3[1m], and its session file exists only under ~/.config/claude-
+zai/personal/projects. Plugins: all four personal plugins installed and enabled in the
+zai directory through clanker exec --provider zai -- claude plugin install. In the
+deepseek directory both install and marketplace update failed because the copied
+extraKnownMarketplaces are not registered until a session starts there; this was stopped
+after two attempts and is left for the operator (see Operator Guidance Log). DeepSeek
+was not called live; its acceptance check in this task covers glm only. Codex and
+OpenCode provider directories were not created, so their provider launches fail closed
+until they are.
 
 ## T010 — Replace chrono with jiff for the local date
 
