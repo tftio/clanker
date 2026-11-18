@@ -1,7 +1,6 @@
 //! Pi integration against the shipped config, without provider access.
 
 use std::fs;
-use std::os::unix::fs::symlink;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -18,7 +17,9 @@ impl Sandbox {
             temp.path().join("config.toml"),
             include_str!("../config/config.toml"),
         )?;
-        fs::create_dir_all(temp.path().join(".pi/agent"))?;
+        for context in ["personal", "work"] {
+            fs::create_dir_all(temp.path().join(".config/pi").join(context))?;
+        }
         let bundle = temp.path().join(".local/prompter");
         fs::create_dir_all(bundle.join("library"))?;
         fs::write(
@@ -47,7 +48,7 @@ impl Sandbox {
 }
 
 #[test]
-fn personal_pi_uses_existing_root_neutral_prompt_and_preserves_native_model_selection() -> TestResult
+fn personal_pi_uses_context_root_neutral_prompt_and_preserves_native_model_selection() -> TestResult
 {
     let sandbox = Sandbox::new()?;
     let output = sandbox
@@ -67,7 +68,12 @@ fn personal_pi_uses_existing_root_neutral_prompt_and_preserves_native_model_sele
         plan.pointer("/environment/PI_CODING_AGENT_DIR/value")
             .and_then(serde_json::Value::as_str)
             .ok_or("no Pi config directory")?,
-        sandbox.temp.path().join(".pi/agent").display().to_string()
+        sandbox
+            .temp
+            .path()
+            .join(".config/pi/personal")
+            .display()
+            .to_string()
     );
     assert!(
         plan["prompt"]
@@ -90,32 +96,58 @@ fn personal_pi_uses_existing_root_neutral_prompt_and_preserves_native_model_sele
     Ok(())
 }
 
+/// The `PI_CODING_AGENT_DIR` value in a dry-run plan.
+fn planned_pi_dir(output: &std::process::Output) -> Result<String, Box<dyn std::error::Error>> {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let plan = plan.get("data").unwrap_or(&plan);
+    Ok(plan
+        .pointer("/environment/PI_CODING_AGENT_DIR/value")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("no Pi config directory")?
+        .to_owned())
+}
+
 #[test]
-fn pi_command_and_symlink_reject_work_even_with_existing_personal_root() -> TestResult {
+fn pi_uses_a_separate_root_per_context() -> TestResult {
     let sandbox = Sandbox::new()?;
+    for context in ["personal", "work"] {
+        let output = sandbox
+            .command()
+            .args(["--json", "pi", "--context", context, "--dry-run"])
+            .output()?;
+        let expected = sandbox.temp.path().join(".config/pi").join(context);
+        assert_eq!(planned_pi_dir(&output)?, expected.display().to_string());
+    }
+    Ok(())
+}
+
+#[test]
+fn pi_fails_closed_when_the_context_root_is_missing() -> TestResult {
+    let sandbox = Sandbox::new()?;
+    fs::remove_dir_all(sandbox.temp.path().join(".config/pi/work"))?;
     let output = sandbox
         .command()
         .args(["pi", "--context", "work", "--dry-run"])
         .output()?;
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("not enabled in context `work`"));
-    let link = sandbox.temp.path().join("pi-launch");
-    symlink(env!("CARGO_BIN_EXE_clanker"), &link)?;
-    let mut command = Command::new(link);
-    sandbox.configure(&mut command);
-    let output = command.env("CLANKER_CONTEXT", "work").output()?;
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("not enabled in context `work`"));
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("config directory"), "{error}");
+    assert!(error.contains(".config/pi/work"), "{error}");
     Ok(())
 }
 
 #[test]
-fn exec_exports_pi_only_in_personal_and_removes_inherited_personal_root_in_work() -> TestResult {
+fn exec_exports_the_context_pi_root_over_an_inherited_one() -> TestResult {
     let sandbox = Sandbox::new()?;
     for context in ["personal", "work"] {
         let output = sandbox
             .command()
-            .env("PI_CODING_AGENT_DIR", "/inherited-personal")
+            .env("PI_CODING_AGENT_DIR", "/inherited-root")
             .args(["exec", "--context", context, "--", "/usr/bin/env"])
             .output()?;
         assert!(
@@ -124,8 +156,9 @@ fn exec_exports_pi_only_in_personal_and_removes_inherited_personal_root_in_work(
             String::from_utf8_lossy(&output.stderr)
         );
         let text = String::from_utf8_lossy(&output.stdout);
-        assert_eq!(text.contains("PI_CODING_AGENT_DIR="), context == "personal");
-        assert!(!text.contains("/inherited-personal"));
+        let expected = sandbox.temp.path().join(".config/pi").join(context);
+        assert!(text.contains(&format!("PI_CODING_AGENT_DIR={}\n", expected.display())));
+        assert!(!text.contains("/inherited-root"));
     }
     Ok(())
 }

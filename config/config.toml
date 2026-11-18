@@ -61,13 +61,12 @@ environment = "OPENCODE_CONFIG_CONTENT"
 environment = "OPENCODE_CONFIG_DIR"
 path = "~/.config/opencode/{context}"
 
-# Pi keeps one configuration directory for all of its providers, auth, and
-# model selection, so it is restricted to a single context. No provider
-# credential is granted automatically.
+# Pi keeps its providers, auth, settings, and sessions in the directory named
+# by PI_CODING_AGENT_DIR, so each context gets its own. No provider credential
+# is granted automatically.
 [harness.pi]
 bin = "pi"
 family = "deepseek"
-contexts = ["personal"]
 default_args = []
 
 [harness.pi.injection]
@@ -76,7 +75,7 @@ args = ["--append-system-prompt", "{file}"]
 
 [harness.pi.config_dir]
 environment = "PI_CODING_AGENT_DIR"
-path = "~/.pi/agent"
+path = "~/.config/pi/{context}"
 
 [model.opus]
 harness = "claude"
