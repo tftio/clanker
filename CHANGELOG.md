@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.2](https://github.com/tftio/clanker/compare/v0.12.1...v0.12.2) - 2026-11-24
+
+### Other
+
+- *(deps)* update dependency cargo:cargo-nextest to v0.9.150 [security] ([#11](https://github.com/tftio/clanker/pull/11))
+
 ## [0.12.1](https://github.com/tftio/clanker/compare/v0.12.0...v0.12.1) - 2026-11-23
 
 ### Other
