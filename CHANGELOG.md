@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/tftio/clanker/compare/v0.12.0...v0.12.1) - 2026-11-23
+
+### Other
+
+- update tftio/gh-actions reusable workflow pin to v2.5.1 ([#22](https://github.com/tftio/clanker/pull/22))
+- *(deps)* update cargo dependencies (non-major) ([#21](https://github.com/tftio/clanker/pull/21))
+
 ## [0.12.0](https://github.com/tftio/clanker/compare/v0.11.3...v0.12.0) - 2026-11-18
 
 ### Added
